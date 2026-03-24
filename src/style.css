@@ -1,0 +1,46 @@
+:root {
+  --brand-500: #6e56cf;
+  --brand-400: #8369ef;
+  --brand-100: #efe9ff;
+  --text-900: #2f244f;
+  --text-700: #4f4570;
+  --text-500: #9388b2;
+  --bg-page: #f7f6fd;
+  --bg-card: #ffffff;
+  --border-soft: rgba(103, 80, 164, 0.12);
+  --shadow-soft: 0 18px 48px rgba(82, 59, 152, 0.1);
+  font-family: "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  color: var(--text-900);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  width: 100%;
+  min-height: 100%;
+  height: 100%;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at top left, rgba(124, 92, 255, 0.08), transparent 28%),
+    linear-gradient(180deg, #fcfbff 0%, var(--bg-page) 100%);
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
