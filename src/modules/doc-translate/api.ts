@@ -152,6 +152,25 @@ interface WorkflowArtifactBlobResponse {
   contentType: string | null;
 }
 
+// 更新合同工作流（例如设置 is_hidden 字段）
+export async function updateContractWorkflow(
+  token: string,
+  workflowId: string,
+  data: { is_hidden?: boolean }
+) {
+  const resp = await fetch(`/api/contract-workflows/${workflowId}`, {
+    method: 'PATCH',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(data),
+  });
+  if (!resp.ok) {
+    throw new Error(`update workflow failed: ${resp.status}`);
+  }
+  return resp.json();
+}
 function authHeaders(accessToken: string | null | undefined): AuthHeaders | undefined {
   const token = String(accessToken || "").trim();
   if (!token) {

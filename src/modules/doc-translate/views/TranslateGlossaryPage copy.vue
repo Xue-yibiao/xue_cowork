@@ -21,19 +21,6 @@ import {
 
 type DialogMode = "create" | "edit";
 
-
-// 语言对筛选（新增）
-const selectedLanguagePair = ref<string | null>(null);
-
-const langPairOptions = [
-  { label: '全部语言', value: '' },
-  { label: '英语-简体中文', value: 'en->zh' },
-  { label: '简体中文-英语', value: 'zh->en' },
-];
-
-const filterSrcLang = ref<string | null>(null);
-const filterTgtLang = ref<string | null>(null);
-
 const authStore = useAuthStore();
 const accessToken = computed(() => authStore.accessToken || "");
 
@@ -83,7 +70,6 @@ const entryForm = ref({
   notes: "",
   is_active: true,
 });
-
 
 const importDialogVisible = ref(false);
 const importDialogSubmitting = ref(false);
@@ -166,21 +152,12 @@ async function loadEntries() {
   try {
     const offset = (entryPage.value - 1) * entryPageSize.value;
     const isActiveParam = entryActive.value === "true" ? true : entryActive.value === "false" ? false : undefined;
-    
-    const params: any = {
+    const resp = await listTermbaseEntries(accessToken.value, Number(selectedSetId.value), {
       q: entryKeyword.value.trim() || undefined,
       is_active: isActiveParam,
       limit: entryPageSize.value,
       offset,
-    };
-    
-    // 【新增】语言对筛选
-    if (filterSrcLang.value && filterTgtLang.value) {
-      params.src_lang = filterSrcLang.value;
-      params.tgt_lang = filterTgtLang.value;
-    }
-    
-    const resp = await listTermbaseEntries(accessToken.value, Number(selectedSetId.value), params);
+    });
     entryItems.value = resp.items || [];
     entryTotal.value = Number(resp.total || 0);
   } catch (error) {
@@ -190,25 +167,7 @@ async function loadEntries() {
     entryLoading.value = false;
   }
 }
-function onLanguagePairChange() {
-  if (selectedLanguagePair.value) {
-    if (selectedLanguagePair.value === '') {
-      // 选中“全部”时清空筛选
-      filterSrcLang.value = null;
-      filterTgtLang.value = null;
-    } else {
-      const parts = selectedLanguagePair.value.split('->');
-      filterSrcLang.value = parts[0] ?? null;
-      filterTgtLang.value = parts[1] ?? null;
-    }
-  } else {
-    // 用户手动清空选择（clearable触发）时，也清空筛选
-    filterSrcLang.value = null;
-    filterTgtLang.value = null;
-  }
-  entryPage.value = 1;
-  loadEntries();
-}
+
 function openCreateSetDialog() {
   setDialogMode.value = "create";
   editingSetId.value = null;
@@ -516,13 +475,12 @@ onMounted(async () => {
             <h2>{{ currentSet?.name }}</h2>
             <p>{{ currentSet?.description || "当前术语表已接入文档翻译与文本翻译流程。" }}</p>
           </div>
-          <div><el-button  class="narrow-btn" @click="handleDeleteSet">停用术语库</el-button></div>
 
-          <!-- <div class="summary-tags">
+          <div class="summary-tags">
             <el-tag>{{ currentSet?.src_lang || "-" }} -> {{ currentSet?.tgt_lang || "-" }}</el-tag>
             <el-tag :type="currentSet?.is_active === false ? 'info' : 'success'">{{ currentSet?.is_active === false ? "停用" : "活跃" }}</el-tag>
-          </div> -->
-        </div> 
+          </div>
+        </div>
 
         <div class="entry-filters">
           <el-input v-model="entryKeyword" placeholder="搜索术语原文/译文" clearable @keyup.enter="() => { entryPage = 1; loadEntries(); }" />
@@ -531,23 +489,8 @@ onMounted(async () => {
             <el-option label="仅停用" value="false" />
             <el-option label="全部" value="" />
           </el-select>
-            <!-- 新增语言对筛选器 -->
-  <el-select
-    v-model="selectedLanguagePair"
-    placeholder="全部语言"
-    clearable
-    style="width: 180px"
-    @change="onLanguagePairChange"
-  >
-    <el-option
-      v-for="pair in langPairOptions"
-      :key="pair.value"
-      :label="pair.label"
-      :value="pair.value"
-    />
-  </el-select>
           <el-button @click="() => { entryPage = 1; loadEntries(); }">查询</el-button>
-          <!-- <el-button  class="narrow-btn" @click="handleDeleteSet">停用术语库</el-button> -->
+          <el-button @click="handleDeleteSet">停用术语库</el-button>
         </div>
 
         <el-empty v-if="!entryLoading && entryItems.length === 0" description="当前术语表还没有术语">
@@ -622,7 +565,7 @@ onMounted(async () => {
       </template>
     </el-dialog>
 
-    <!-- <el-dialog v-model="entryDialogVisible" :title="entryDialogMode === 'create' ? '添加术语' : '编辑术语'" width="700px">
+    <el-dialog v-model="entryDialogVisible" :title="entryDialogMode === 'create' ? '添加术语' : '编辑术语'" width="700px">
       <el-form label-width="90px">
         <div class="form-grid">
           <el-form-item label="源语言">
@@ -672,51 +615,8 @@ onMounted(async () => {
         <el-button @click="entryDialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="entryDialogSubmitting" @click="submitEntryDialog">保存</el-button>
       </template>
-    </el-dialog> -->
-<el-dialog v-model="entryDialogVisible" :title="entryDialogMode === 'create' ? '添加术语' : '编辑术语'" width="700px">
-  <el-form label-width="90px">
-    <!-- 替换原语言选择器为只读标签 -->
-    <el-form-item label="语言方向">
-      <el-tag>{{ currentSet?.src_lang || "-" }} → {{ currentSet?.tgt_lang || "-" }}</el-tag>
-    </el-form-item>
-    <!-- 其他表单项保持不变 -->
-    <el-form-item label="原文">
-      <el-input v-model="entryForm.src_raw" maxlength="500" show-word-limit />
-    </el-form-item>
-    <el-form-item label="译文">
-      <el-input v-model="entryForm.tgt" maxlength="500" show-word-limit />
-    </el-form-item>
-    <div class="form-grid">
-      <el-form-item label="优先级">
-        <el-input-number v-model="entryForm.priority" :min="1" :max="999999" style="width: 100%" />
-      </el-form-item>
-      <el-form-item label="匹配模式">
-        <el-select v-model="entryForm.match_mode">
-          <el-option label="substring" value="substring" />
-          <el-option label="exact" value="exact" />
-        </el-select>
-      </el-form-item>
-    </div>
-    <div class="form-grid">
-      <el-form-item label="区分大小写">
-        <el-switch v-model="entryForm.case_sensitive" />
-      </el-form-item>
-      <el-form-item label="安全词条">
-        <el-switch v-model="entryForm.is_safe" />
-      </el-form-item>
-    </div>
-    <el-form-item v-if="entryDialogMode === 'edit'" label="是否活跃">
-      <el-switch v-model="entryForm.is_active" />
-    </el-form-item>
-    <el-form-item label="备注">
-      <el-input v-model="entryForm.notes" type="textarea" :rows="3" maxlength="300" show-word-limit />
-    </el-form-item>
-  </el-form>
-  <template #footer>
-    <el-button @click="entryDialogVisible = false">取消</el-button>
-    <el-button type="primary" :loading="entryDialogSubmitting" @click="submitEntryDialog">保存</el-button>
-  </template>
-</el-dialog>
+    </el-dialog>
+
     <el-dialog v-model="importDialogVisible" title="导入术语" width="860px">
       <div class="import-dialog">
         <el-upload
@@ -899,7 +799,7 @@ onMounted(async () => {
   }
 
   .entry-filters {
-    grid-template-columns: 1fr 160px 180px auto auto; /* 最后两列 auto */
+    grid-template-columns: 1fr;
   }
 }
 
@@ -915,9 +815,5 @@ onMounted(async () => {
     grid-template-columns: 1fr;
     display: grid;
   }
-}
-.narrow-btn {
-  width: 300px;      
-  padding: 8px 12px ;    /* 自定义内边距，可调小 */
 }
 </style>
