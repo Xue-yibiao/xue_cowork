@@ -50,6 +50,13 @@ function handleLogout() {
   authStore.logout();
   router.replace("/login");
 }
+
+
+const isTranslatePage = computed(() => route.path.startsWith('/doc-translate/translate'));
+
+function goToTranslate() {
+  router.push('/doc-translate/translate');
+}
 </script>
 
 <template>
@@ -115,7 +122,7 @@ function handleLogout() {
         </div>
 
         <div class="header-actions">
-          <button class="ghost-action" type="button" @click="navigate('/doc-translate/translate')">
+          <button v-if="!isTranslatePage" class="ghost-action" type="button" @click="goToTranslate">
             <el-icon><Grid /></el-icon>
             <span>返回翻译台</span>
           </button>

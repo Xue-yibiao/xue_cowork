@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
-import { ArrowUp, Document, Close} from "@element-plus/icons-vue";
+import { ArrowUp } from "@element-plus/icons-vue";
 import type { UploadInstance, UploadProps, UploadUserFile } from "element-plus";
 
 import { useAuthStore } from "../../../stores/auth";
@@ -17,7 +17,7 @@ import {
 
 // 表删实隐列表
 import { updateContractWorkflow } from "../api";
-import { Delete } from "@element-plus/icons-vue";
+import {  Delete } from "@element-plus/icons-vue";
 
 type WorkspaceMode = "upload" | "text";
 
@@ -72,13 +72,6 @@ watch(selectedPair, (newPair) => {
   }
 });
 
-//abc 手动删除已选文件
-function handleRemoveFile() {
-  selectedDocx.value = null;
-  uploadList.value = [];
-  uploadRef.value?.clearFiles();
-}
-
 function isDocxFilename(name: string): boolean {
   return String(name || "").trim().toLowerCase().endsWith(".docx");
 }
@@ -128,7 +121,7 @@ async function hideRecentTask(workflowId: string) {
   try {
     // 调用更新接口，将 is_hidden 设置为 true
     await updateContractWorkflow(accessToken.value, workflowId, { is_hidden: true });
-
+    
     // 从当前列表中移除该任务
     const index = recentItems.value.findIndex(item => item.workflow_id === workflowId);
     if (index !== -1) {
@@ -205,6 +198,7 @@ async function handleSubmitDocx() {
       file,
       src_lang: srcLang.value,
       tgt_lang: tgtLang.value,
+      
       enable_tb: enableTb.value,
       tb_set_id: tbSetId.value,
     });
@@ -236,7 +230,7 @@ async function handleSubmitText() {
       tgt_lang: tgtLang.value,
       enable_tb: enableTb.value,
       tb_set_id: tbSetId.value,
-
+     
     });
     ElMessage.success(`文本任务已提交：${resp.workflow_id}`);
     textInput.value = "";
@@ -271,12 +265,10 @@ onMounted(async () => {
   <div class="translate-page">
     <section class="compose-panel">
       <div class="mode-switch">
-        <button :class="['mode-pill', { 'is-active': workspaceMode === 'upload' }]" type="button"
-          @click="workspaceMode = 'upload'">
+        <button :class="['mode-pill', { 'is-active': workspaceMode === 'upload' }]" type="button" @click="workspaceMode = 'upload'">
           文档翻译
         </button>
-        <button :class="['mode-pill', { 'is-active': workspaceMode === 'text' }]" type="button"
-          @click="workspaceMode = 'text'">
+        <button :class="['mode-pill', { 'is-active': workspaceMode === 'text' }]" type="button" @click="workspaceMode = 'text'">
           语句翻译
         </button>
       </div>
@@ -294,13 +286,18 @@ onMounted(async () => {
         </el-select>
         <button class="glossary-link" type="button" @click="openGlossary">管理术语表</button>
       </div> -->
-      <div class="translate-settings">
-        <!-- 原来的两个 select 删除，替换为一个语言方向选择器 -->
-        <el-select v-model="selectedPair" placeholder="语言方向">
-          <el-option v-for="item in languagePairs" :key="item.value" :label="item.label" :value="item.value" />
-        </el-select>
+<div class="translate-settings">
+  <!-- 原来的两个 select 删除，替换为一个语言方向选择器 -->
+  <el-select v-model="selectedPair" placeholder="语言方向">
+    <el-option
+      v-for="item in languagePairs"
+      :key="item.value"
+      :label="item.label"
+      :value="item.value"
+    />
+  </el-select>
 
-        <!-- <el-checkbox v-model="enableTb">使用术语表</el-checkbox>
+  <!-- <el-checkbox v-model="enableTb">使用术语表</el-checkbox>
   <el-select
     v-model="tbSetId"
     placeholder="选择术语表"
@@ -314,68 +311,32 @@ onMounted(async () => {
       :value="item.id"
     />
   </el-select> -->
-        <button class="glossary-link" type="button" @click="openGlossary">
-          管理术语表
-        </button>
-      </div>
+  <button class="glossary-link" type="button" @click="openGlossary">
+    管理术语表
+  </button>
+</div>
       <div class="compose-board">
         <template v-if="workspaceMode === 'upload'">
-          <!-- <el-upload ref="uploadRef" v-model:file-list="uploadList" class="upload-zone" drag :auto-upload="false"
-            :limit="1" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            :before-upload="beforeUploadDocx" :on-change="handleUploadChange" :on-remove="handleUploadRemove"
-            :on-exceed="handleUploadExceed">
-            <el-icon class="upload-icon">
-              <ArrowUp />
-            </el-icon>
+          <el-upload
+            ref="uploadRef"
+            v-model:file-list="uploadList"
+            class="upload-zone"
+            drag
+            :auto-upload="false"
+            :limit="1"
+            accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            :before-upload="beforeUploadDocx"
+            :on-change="handleUploadChange"
+            :on-remove="handleUploadRemove"
+            :on-exceed="handleUploadExceed"
+          >
+            <el-icon class="upload-icon"><ArrowUp /></el-icon>
             <div class="upload-title">点击选择或拖拽文件到这里</div>
             <div class="upload-note">
               当前前端只允许 `.docx`，后端兼容扩展保持不收窄。
             </div>
-          </el-upload> -->
-          
-<el-upload
-  ref="uploadRef"
-  v-model:file-list="uploadList"
-  class="upload-zone"
-  drag
-  :auto-upload="false"
-  :limit="1"
-  accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-  :before-upload="beforeUploadDocx"
-  :on-change="handleUploadChange"
-  :on-remove="handleUploadRemove"
-  :on-exceed="handleUploadExceed"
->
-  <div class="upload-drag-content">
-    <!-- 未选择文件时显示提示 -->
-    <template v-if="uploadList.length === 0">
-      <el-icon class="upload-icon"><ArrowUp /></el-icon>
-      <div class="upload-title">点击选择或拖拽文件到这里</div>
-      <div class="upload-note">
-        当前前端只允许 `.docx`，后端兼容扩展保持不收窄。
-      </div>
-    </template>
-    <!-- 已选择文件时显示文件图标、文件名和删除按钮 -->
-    <template v-else>
-      <div class="file-info">
-        <div class="file-icon-wrapper">
-          <el-icon class="file-icon"><Document /></el-icon>
-          <el-button
-            class="remove-file"
-            size="small"
-            text
-            @click.stop="handleRemoveFile"
-          >
-            <el-icon><Close /></el-icon>
-          </el-button>
-        </div>
-        <div class="file-name-row">
-          <span class="file-name">{{ uploadList[0]?.name }}</span>
-        </div>
-      </div>
-    </template>
-  </div>
-</el-upload>
+          </el-upload>
+
           <p class="helper-note">文件不能超过 2048MB</p>
           <el-button type="primary" class="submit-btn" :loading="submittingDoc" @click="handleSubmitDocx">
             开始翻译
@@ -383,11 +344,17 @@ onMounted(async () => {
         </template>
 
         <template v-else>
-          <el-input v-model="textInput" class="text-input" type="textarea" :rows="18" maxlength="120000" show-word-limit
-            placeholder="输入你要翻译的文本（Shift+Enter 换行）" />
+          <el-input
+            v-model="textInput"
+            class="text-input"
+            type="textarea"
+            :rows="18"
+            maxlength="120000"
+            show-word-limit
+            placeholder="输入你要翻译的文本（Shift+Enter 换行）"
+          />
           <div class="text-actions">
-            <el-button type="primary" class="submit-btn" :loading="submittingText"
-              @click="handleSubmitText">开始翻译</el-button>
+            <el-button type="primary" class="submit-btn" :loading="submittingText" @click="handleSubmitText">开始翻译</el-button>
           </div>
         </template>
       </div>
@@ -428,27 +395,37 @@ onMounted(async () => {
             {{ row.status || "-" }}
           </el-tag>
         </button> -->
-        <button v-for="row in recentItems" :key="row.workflow_id" class="recent-item" type="button"
-          @click="openTask(row)">
-          <div class="recent-meta">
-            <div class="file-dot">W</div>
-            <div class="recent-copy">
-              <p class="recent-name">{{ row.source_filename || row.workflow_id }}</p>
-              <p class="recent-sub">{{ formatUnixTs(row.updated_at || row.created_at) }}</p>
-            </div>
-          </div>
-          <div class="recent-actions">
-            <el-tag size="small"
-              :type="row.status === 'SUCCEEDED' ? 'success' : row.status === 'WAIT_REVIEW' ? 'warning' : row.status === 'FAILED' ? 'danger' : 'info'">
-              {{ row.status || "-" }}
-            </el-tag>
-            <el-button class="hide-btn" size="small" text @click.stop="hideRecentTask(row.workflow_id)">
-              <el-icon>
-                <Delete />
-              </el-icon>
-            </el-button>
-          </div>
-        </button>
+        <button
+  v-for="row in recentItems"
+  :key="row.workflow_id"
+  class="recent-item"
+  type="button"
+  @click="openTask(row)"
+>
+  <div class="recent-meta">
+    <div class="file-dot">W</div>
+    <div class="recent-copy">
+      <p class="recent-name">{{ row.source_filename || row.workflow_id }}</p>
+      <p class="recent-sub">{{ formatUnixTs(row.updated_at || row.created_at) }}</p>
+    </div>
+  </div>
+  <div class="recent-actions">
+    <el-tag
+      size="small"
+      :type="row.status === 'SUCCEEDED' ? 'success' : row.status === 'WAIT_REVIEW' ? 'warning' : row.status === 'FAILED' ? 'danger' : 'info'"
+    >
+      {{ row.status || "-" }}
+    </el-tag>
+    <el-button
+      class="hide-btn"
+      size="small"
+      text
+      @click.stop="hideRecentTask(row.workflow_id)"
+    >
+      <el-icon><Delete /></el-icon>
+    </el-button>
+  </div>
+</button>
       </div>
     </aside>
   </div>
@@ -687,7 +664,6 @@ onMounted(async () => {
 }
 
 @media (max-width: 768px) {
-
   .compose-panel,
   .recent-panel {
     padding: 18px;
@@ -699,7 +675,6 @@ onMounted(async () => {
     align-items: stretch;
   }
 }
-
 /* 让删除按钮悬停时出现 */
 .recent-actions {
   display: flex;
@@ -717,113 +692,4 @@ onMounted(async () => {
   opacity: 1;
 }
 
-/* 拖拽区 */
-/* 隐藏默认文件列表（避免显示在框下方） */
-.upload-zone :deep(.el-upload-list) {
-  display: none;
-}
-
-/* 拖拽区域内容布局 */
-.upload-drag-content {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  min-height: 200px;
-  width: 100%;
-}
-
-/* 文件信息容器：垂直布局，所有内容居中对齐 */
-.file-info {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-  padding: 20px;
-  background: rgba(103, 80, 164, 0.06);
-  border-radius: 16px;
-  border: 1px solid rgba(103, 80, 164, 0.2);
-  width: 100%;
-  max-width: 300px;
-  margin: 0 auto;
-}
-
-/* 图标容器（Windows 中等图标风格） */
-.file-icon-wrapper {
-  position: relative;
-  width: 80px;
-  height: 80px;
-  background: linear-gradient(145deg, #ffffff 0%, #f5f5f5 100%);
-  border-radius: 16px;
-  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.05);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  overflow: visible !important; /* 确保按钮不被裁剪 */
-}
-
-.file-icon {
-  font-size: 48px;
-  color: #2b5797;
-}
-
-/* 删除按钮：绝对定位，位于图标容器右上角，始终可见 */
-.remove-file {
-  position: absolute !important;
-  top: -8px !important;
-  right: -8px !important;
-  width: 24px !important;
-  height: 24px !important;
-  padding: 0 !important;
-  background: rgb(0, 0, 0) !important;
-  color: rgb(255, 255, 255) !important;
-  border-radius: 50% !important;
-  display: flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-  cursor: pointer !important;
-  z-index: 100 !important;
-  opacity: 1 !important;
-  visibility: visible !important;
-  pointer-events: auto !important;
-  transition: none !important; /* 去除过渡效果，避免消失 */
-}
-
-.remove-file:hover {
-  background: rgba(220, 53, 69, 0.9) !important; /* 可选悬停变色，但按钮不会消失 */
-  color: white !important;
-}
-
-.remove-file :deep(.el-icon) {
-  font-size: 14px;
-}
-
-/* 文件名行：水平居中，允许自然换行（无折角） */
-.file-name-row {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-}
-
-/* 文件名样式：无折角，允许换行 */
-.file-name {
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--text-900);
-  text-align: center;
-  word-break: break-word;    /* 允许长单词换行 */
-  overflow-wrap: break-word;
-  max-width: 240px;
-  line-height: 1.4;
-}
-
-/* 调整上传区域内部样式 */
-.upload-zone :deep(.el-upload-dragger) {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 32px 24px;
-}
 </style>
