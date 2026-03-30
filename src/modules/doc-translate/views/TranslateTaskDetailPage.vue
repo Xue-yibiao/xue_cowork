@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from "vue";
-import { useRoute, useRouter } from "vue-router";
+import { computed, nextTick, onUnmounted, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 import { ElMessage } from "element-plus";
-import { Download, EditPen, RefreshRight } from "@element-plus/icons-vue";
+import { Download, EditPen } from "@element-plus/icons-vue";
 
 import { useAuthStore } from "../../../stores/auth";
 import PdfCanvasViewer from "../components/PdfCanvasViewer.vue";
+import TranslateReviewWorkspace from "../components/TranslateReviewWorkspace.vue";
 import {
   fetchContractWorkflowArtifactBlob,
   getContractWorkflowDetail,
@@ -15,19 +16,34 @@ import {
 type Dict = Record<string, unknown>;
 
 const route = useRoute();
-const router = useRouter();
 const authStore = useAuthStore();
 const accessToken = computed(() => authStore.accessToken || "");
 const workflowId = computed(() => String(route.params.workflowId || "").trim());
 
 const workflowDetail = ref<Dict | null>(null);
-const loadingDetail = ref(false);
 const loadingPreview = ref(false);
 const sourcePreviewUrl = ref("");
 const translatedPreviewUrl = ref("");
 const downloadingArtifactKey = ref<WorkflowArtifactKey | "">("");
 const lastLoadedTranslatedStatus = ref("");
+const reviewVisible = ref(false);
+const reviewWindowRef = ref<HTMLElement | null>(null);
+const reviewWindowX = ref(0);
+const reviewWindowY = ref(0);
+const reviewWindowWidth = ref(0);
+const reviewWindowHeight = ref(0);
 let pollTimer: ReturnType<typeof setInterval> | null = null;
+let interactionMode: "idle" | "drag" | "resize" = "idle";
+let dragOffsetX = 0;
+let dragOffsetY = 0;
+let resizeStartMouseX = 0;
+let resizeStartMouseY = 0;
+let resizeStartWidth = 0;
+let resizeStartHeight = 0;
+
+const REVIEW_MIN_WIDTH = 720;
+const REVIEW_MIN_HEIGHT = 520;
+const REVIEW_EDGE_GAP = 12;
 
 function revokeUrl(value: string) {
   if (value) {
@@ -49,6 +65,122 @@ function stopPolling() {
   }
 }
 
+function stopDragging() {
+  interactionMode = "idle";
+  window.removeEventListener("mousemove", handleWindowMouseMove);
+  window.removeEventListener("mouseup", stopDragging);
+}
+
+function getReviewWindowMaxSize() {
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.innerHeight;
+  return {
+    maxWidth: Math.max(360, viewportWidth - REVIEW_EDGE_GAP * 2),
+    maxHeight: Math.max(420, viewportHeight - REVIEW_EDGE_GAP * 2),
+  };
+}
+
+function ensureReviewWindowSize() {
+  const { maxWidth, maxHeight } = getReviewWindowMaxSize();
+  const minWidth = Math.min(REVIEW_MIN_WIDTH, maxWidth);
+  const minHeight = Math.min(REVIEW_MIN_HEIGHT, maxHeight);
+  if (!reviewWindowWidth.value) {
+    reviewWindowWidth.value = Math.min(1080, maxWidth);
+  }
+  if (!reviewWindowHeight.value) {
+    reviewWindowHeight.value = Math.min(780, maxHeight);
+  }
+  reviewWindowWidth.value = Math.min(Math.max(reviewWindowWidth.value, minWidth), maxWidth);
+  reviewWindowHeight.value = Math.min(Math.max(reviewWindowHeight.value, minHeight), maxHeight);
+}
+
+function clampReviewWindowPosition(nextX: number, nextY: number) {
+  ensureReviewWindowSize();
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.innerHeight;
+  const panelWidth = reviewWindowWidth.value;
+  const panelHeight = reviewWindowHeight.value;
+  const minX = REVIEW_EDGE_GAP;
+  const minY = REVIEW_EDGE_GAP;
+  const maxX = Math.max(minX, viewportWidth - panelWidth - REVIEW_EDGE_GAP);
+  const maxY = Math.max(minY, viewportHeight - panelHeight - REVIEW_EDGE_GAP);
+  reviewWindowX.value = Math.min(Math.max(nextX, minX), maxX);
+  reviewWindowY.value = Math.min(Math.max(nextY, minY), maxY);
+}
+
+function clampReviewWindowSize(nextWidth: number, nextHeight: number) {
+  const { maxWidth, maxHeight } = getReviewWindowMaxSize();
+  const minWidth = Math.min(REVIEW_MIN_WIDTH, maxWidth);
+  const minHeight = Math.min(REVIEW_MIN_HEIGHT, maxHeight);
+  reviewWindowWidth.value = Math.min(Math.max(nextWidth, minWidth), maxWidth);
+  reviewWindowHeight.value = Math.min(Math.max(nextHeight, minHeight), maxHeight);
+  clampReviewWindowPosition(reviewWindowX.value, reviewWindowY.value);
+}
+
+function centerReviewWindow() {
+  nextTick(() => {
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    ensureReviewWindowSize();
+    const panelWidth = reviewWindowWidth.value;
+    const panelHeight = reviewWindowHeight.value;
+    clampReviewWindowPosition(
+      Math.round((viewportWidth - panelWidth) / 2),
+      Math.round((viewportHeight - panelHeight) / 2),
+    );
+  });
+}
+
+function handleWindowMouseMove(event: MouseEvent) {
+  if (interactionMode === "idle") {
+    return;
+  }
+  if (interactionMode === "drag") {
+    clampReviewWindowPosition(event.clientX - dragOffsetX, event.clientY - dragOffsetY);
+    return;
+  }
+  if (interactionMode === "resize") {
+    const nextWidth = resizeStartWidth + (event.clientX - resizeStartMouseX);
+    const nextHeight = resizeStartHeight + (event.clientY - resizeStartMouseY);
+    clampReviewWindowSize(nextWidth, nextHeight);
+  }
+}
+
+function handleReviewDragStart(event: MouseEvent) {
+  if (!reviewVisible.value) {
+    return;
+  }
+  const rect = reviewWindowRef.value?.getBoundingClientRect();
+  dragOffsetX = event.clientX - (rect?.left || reviewWindowX.value);
+  dragOffsetY = event.clientY - (rect?.top || reviewWindowY.value);
+  interactionMode = "drag";
+  window.addEventListener("mousemove", handleWindowMouseMove);
+  window.addEventListener("mouseup", stopDragging);
+}
+
+function handleReviewResizeStart(event: MouseEvent) {
+  if (!reviewVisible.value) {
+    return;
+  }
+  event.preventDefault();
+  ensureReviewWindowSize();
+  interactionMode = "resize";
+  resizeStartMouseX = event.clientX;
+  resizeStartMouseY = event.clientY;
+  resizeStartWidth = reviewWindowWidth.value;
+  resizeStartHeight = reviewWindowHeight.value;
+  window.addEventListener("mousemove", handleWindowMouseMove);
+  window.addEventListener("mouseup", stopDragging);
+}
+
+function handleViewportResize() {
+  if (!reviewVisible.value) {
+    return;
+  }
+  ensureReviewWindowSize();
+  clampReviewWindowPosition(reviewWindowX.value, reviewWindowY.value);
+}
+
 const detailArtifacts = computed<Dict>(() => {
   const raw = workflowDetail.value?.artifacts;
   if (raw && typeof raw === "object") {
@@ -59,7 +191,16 @@ const detailArtifacts = computed<Dict>(() => {
 
 const detailStatus = computed(() => String(workflowDetail.value?.status || "-"));
 const detailLanguagePair = computed(() => String(workflowDetail.value?.language_pair || "-"));
-const detailFilename = computed(() => String(detailArtifacts.value.source_filename || workflowId.value || "未命名文档"));
+const detailFilename = computed(() =>
+  String(
+    detailArtifacts.value.source_filename ||
+      workflowDetail.value?.source_filename ||
+      workflowDetail.value?.filename ||
+      workflowDetail.value?.original_filename ||
+      workflowId.value ||
+      "未命名文档",
+  ),
+);
 const canReview = computed(() => Boolean(workflowDetail.value?.review) || detailStatus.value === "WAIT_REVIEW");
 
 async function loadPreviewBlob(artifactKey: WorkflowArtifactKey): Promise<string> {
@@ -71,7 +212,6 @@ async function loadDetail() {
   if (!workflowId.value) {
     return;
   }
-  loadingDetail.value = true;
   try {
     const prevStatus = detailStatus.value;
     const detail = await getContractWorkflowDetail(accessToken.value, workflowId.value);
@@ -93,8 +233,6 @@ async function loadDetail() {
   } catch (error) {
     console.error(error);
     ElMessage.error("加载任务详情失败");
-  } finally {
-    loadingDetail.value = false;
   }
 }
 
@@ -162,13 +300,26 @@ function goReview() {
   if (!workflowId.value) {
     return;
   }
-  router.push(`/doc-translate/task/${encodeURIComponent(workflowId.value)}/review`);
+  reviewVisible.value = true;
+  ensureReviewWindowSize();
+  centerReviewWindow();
+}
+
+function closeReview() {
+  reviewVisible.value = false;
+  stopDragging();
+}
+
+async function handleReviewSubmitted() {
+  lastLoadedTranslatedStatus.value = "";
+  await loadDetail();
 }
 
 watch(
   () => workflowId.value,
   async () => {
     stopPolling();
+    closeReview();
     cleanupPreviews();
     lastLoadedTranslatedStatus.value = "";
     await loadDetail();
@@ -187,7 +338,17 @@ watch(
 
 onUnmounted(() => {
   stopPolling();
+  stopDragging();
+  window.removeEventListener("resize", handleViewportResize);
   cleanupPreviews();
+});
+
+watch(reviewVisible, (visible) => {
+  if (visible) {
+    window.addEventListener("resize", handleViewportResize);
+  } else {
+    window.removeEventListener("resize", handleViewportResize);
+  }
 });
 </script>
 
@@ -201,11 +362,10 @@ onUnmounted(() => {
       </div>
 
       <div class="task-actions">
-        <el-button :icon="RefreshRight" :loading="loadingDetail || loadingPreview" @click="loadDetail">刷新</el-button>
         <el-button :icon="Download" :loading="downloadingArtifactKey === 'translated_docx'" @click="downloadArtifact('translated_docx')">
           下载 DOCX
         </el-button>
-        <el-button type="primary" :icon="EditPen" :disabled="!canReview" @click="goReview">人工校验</el-button>
+        <el-button type="primary" :icon="EditPen" :disabled="!canReview" @click="goReview">人工修订</el-button>
       </div>
     </header>
 
@@ -234,7 +394,6 @@ onUnmounted(() => {
             >
               下载 PDF
             </el-button>
-            <el-button size="small" type="primary" :disabled="!canReview" @click="goReview">人工校验</el-button>
           </div>
         </div>
         <div class="preview-banner">在线展示仅用于快速预览，请下载查看 DOCX 文件的真正排版效果</div>
@@ -243,6 +402,27 @@ onUnmounted(() => {
         </div>
       </article>
     </section>
+
+    <div
+      v-if="reviewVisible"
+      ref="reviewWindowRef"
+      class="review-floating-window"
+      :style="{
+        left: `${reviewWindowX}px`,
+        top: `${reviewWindowY}px`,
+        width: `${reviewWindowWidth}px`,
+        height: `${reviewWindowHeight}px`,
+      }"
+    >
+      <TranslateReviewWorkspace
+        :workflow-id="workflowId"
+        floating
+        @close="closeReview"
+        @submitted="handleReviewSubmitted"
+        @drag-start="handleReviewDragStart"
+      />
+      <button class="review-resize-handle" type="button" aria-label="调整人工修订窗口大小" @mousedown="handleReviewResizeStart" />
+    </div>
   </div>
 </template>
 
@@ -353,6 +533,30 @@ onUnmounted(() => {
   position: relative;
 }
 
+.review-floating-window {
+  position: fixed;
+  z-index: 2000;
+  min-height: 560px;
+  min-width: 720px;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 24px);
+  display: grid;
+  overflow: hidden;
+}
+
+.review-resize-handle {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 18px;
+  height: 18px;
+  border: 0;
+  padding: 0;
+  background:
+    linear-gradient(135deg, transparent 50%, rgba(110, 86, 207, 0.28) 50%) center/100% 100% no-repeat;
+  cursor: nwse-resize;
+}
+
 @media (max-width: 1100px) {
   .task-header {
     flex-direction: column;
@@ -372,6 +576,13 @@ onUnmounted(() => {
   .preview-body {
     min-height: 520px;
     height: 70vh;
+  }
+
+  .review-floating-window {
+    width: calc(100vw - 20px);
+    height: calc(100vh - 20px);
+    min-height: 0;
+    min-width: 0;
   }
 }
 </style>

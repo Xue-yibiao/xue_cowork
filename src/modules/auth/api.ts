@@ -1,6 +1,7 @@
 import { http } from "../../shared/http";
 import type {
   CurrentAppUser,
+  PhoneVerifyResponse,
   TicketExchangeResponse,
   TokenResponse,
   WecomQrUrlResponse,
@@ -52,6 +53,25 @@ async function refreshAccessToken(refreshToken: string): Promise<TicketExchangeR
   return data;
 }
 
+async function sendPhoneLoginCode(phone: string): Promise<void> {
+  await http.post("/auth/phone/send-sms", { phone });
+}
+
+async function verifyPhoneLoginCode(phone: string, code: string): Promise<PhoneVerifyResponse> {
+  const { data } = await http.post<PhoneVerifyResponse>("/auth/phone/verify", {
+    phone,
+    code,
+  });
+  return data;
+}
+
+async function loginWithPhoneToken(phoneRegToken: string): Promise<TicketExchangeResponse> {
+  const { data } = await http.post<TicketExchangeResponse>("/auth/phone/login", {
+    phone_reg_token: phoneRegToken,
+  });
+  return data;
+}
+
 async function getWecomQrLoginUrl(params?: {
   redirect?: string;
   callback?: string;
@@ -71,5 +91,8 @@ export {
   bootstrapWecomSession,
   exchangeLoginTicket,
   getWecomQrLoginUrl,
+  loginWithPhoneToken,
   refreshAccessToken,
+  sendPhoneLoginCode,
+  verifyPhoneLoginCode,
 };

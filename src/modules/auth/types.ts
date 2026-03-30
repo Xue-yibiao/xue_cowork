@@ -1,4 +1,4 @@
-type LoginType = "password" | "wecom";
+type LoginType = "password" | "phone" | "wecom";
 type AuthMode = "bearer" | "wecom-session";
 
 interface CurrentAppUser {
@@ -64,9 +64,21 @@ interface WecomQrUrlResponse {
   callback?: string;
 }
 
+interface PhoneVerifyResponse {
+  phone_reg_token: string;
+}
+
+interface PhoneLoginResponse extends TicketExchangeResponse {
+  ok?: boolean;
+  tokens?: TicketExchangeResponse | null;
+}
+
 export type {
   AuthMode,
   CurrentAppUser,
+  LoginType,
+  PhoneLoginResponse,
+  PhoneVerifyResponse,
   PlatformUser,
   TicketExchangeResponse,
   TokenResponse,

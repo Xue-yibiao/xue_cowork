@@ -14,6 +14,10 @@ server: {
       target: proxyTarget,
       changeOrigin: true,
     },
+    "/nmt": {
+      target: proxyTarget,
+      changeOrigin: true,
+    },
     "/auth": {
       target: proxyTarget,
       changeOrigin: true,

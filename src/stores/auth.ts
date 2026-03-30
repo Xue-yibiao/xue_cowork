@@ -4,10 +4,11 @@ import {
   bootstrapWecomSession,
   exchangeLoginTicket,
   fetchCurrentUser,
+  loginWithPhoneToken,
   passwordLogin,
   refreshAccessToken,
 } from "../modules/auth/api";
-import type { AuthMode, CurrentAppUser, PlatformUser } from "../modules/auth/types";
+import type { AuthMode, CurrentAppUser, LoginType, PhoneLoginResponse, PlatformUser } from "../modules/auth/types";
 import { clearAuthSnapshot, readAuthSnapshot, writeAuthSnapshot } from "../shared/auth-session";
 
 function normalizeRedirect(raw: unknown): string {
@@ -21,7 +22,7 @@ function normalizeRedirect(raw: unknown): string {
   return target;
 }
 
-function mapCurrentUserToPlatform(user: CurrentAppUser): PlatformUser {
+function mapCurrentUserToPlatform(user: CurrentAppUser, loginType: LoginType): PlatformUser {
   const username = user.username || "unknown";
   return {
     id: String(user.id),
@@ -30,7 +31,7 @@ function mapCurrentUserToPlatform(user: CurrentAppUser): PlatformUser {
     email: user.email || "",
     roles: user.roles || [],
     permissions: user.permissions || [],
-    loginType: "password",
+    loginType,
   };
 }
 
@@ -106,7 +107,10 @@ export const useAuthStore = defineStore("auth", {
       this.lastError = null;
       clearAuthSnapshot();
     },
-    async applyBearerSession(tokens: { access_token: string; refresh_token?: string | null }) {
+    async applyBearerSession(
+      tokens: { access_token: string; refresh_token?: string | null },
+      loginType: LoginType = "password",
+    ) {
       const accessToken = String(tokens.access_token || "").trim();
       if (!accessToken) {
         throw new Error("missing access token");
@@ -116,7 +120,7 @@ export const useAuthStore = defineStore("auth", {
       this.mode = "bearer";
       this.accessToken = accessToken;
       this.refreshToken = tokens.refresh_token || null;
-      this.user = mapCurrentUserToPlatform(me);
+      this.user = mapCurrentUserToPlatform(me, loginType);
       this.status = "authenticated";
       this.lastError = null;
       this.persist();
@@ -146,10 +150,11 @@ export const useAuthStore = defineStore("auth", {
 
       try {
         const tokens = await refreshAccessToken(refreshToken);
+        const nextLoginType = this.user?.loginType === "phone" ? "phone" : this.user?.loginType === "wecom" ? "wecom" : "password";
         await this.applyBearerSession({
           access_token: tokens.access_token,
           refresh_token: tokens.refresh_token || refreshToken,
-        });
+        }, nextLoginType);
         return true;
       } catch (error) {
         console.warn("refresh bearer session failed", error);
@@ -166,7 +171,8 @@ export const useAuthStore = defineStore("auth", {
       if (this.mode === "bearer" && this.accessToken) {
         try {
           const me = await fetchCurrentUser(this.accessToken);
-          this.user = mapCurrentUserToPlatform(me);
+          const loginType = this.user?.loginType === "phone" ? "phone" : this.user?.loginType === "wecom" ? "wecom" : "password";
+          this.user = mapCurrentUserToPlatform(me, loginType);
           this.status = "authenticated";
           this.lastError = null;
           this.persist();
@@ -218,11 +224,39 @@ export const useAuthStore = defineStore("auth", {
 
       try {
         const tokens = await passwordLogin(username, password);
-        return await this.applyBearerSession(tokens);
+        return await this.applyBearerSession(tokens, "password");
       } catch (error) {
         console.error("password login failed", error);
         this.lastError = "登录失败，请检查账号、密码或后端服务状态";
         this.clearAuthState();
+        return false;
+      }
+    },
+    async loginWithPhoneCode(phoneRegToken: string) {
+      const token = String(phoneRegToken || "").trim();
+      if (!token) {
+        this.lastError = "验证码校验失败，请重新获取验证码";
+        return false;
+      }
+
+      try {
+        const result = (await loginWithPhoneToken(token)) as PhoneLoginResponse;
+        const accessToken = String(result.access_token || result.tokens?.access_token || "").trim();
+        const refreshToken = String(result.refresh_token || result.tokens?.refresh_token || "").trim() || null;
+        if (!accessToken) {
+          this.lastError = "手机号登录返回中缺少 access token";
+          return false;
+        }
+        return await this.applyBearerSession(
+          {
+            access_token: accessToken,
+            refresh_token: refreshToken,
+          },
+          "phone",
+        );
+      } catch (error) {
+        console.error("phone login failed", error);
+        this.lastError = "手机号登录失败，请确认验证码或账号状态";
         return false;
       }
     },
@@ -275,7 +309,7 @@ export const useAuthStore = defineStore("auth", {
         return await this.applyBearerSession({
           access_token: accessToken,
           refresh_token: result.refresh_token || null,
-        });
+        }, "wecom");
       } catch (error) {
         console.error("finalize ticket callback failed", error);
         this.lastError = "扫码登录回调失败，请重试";

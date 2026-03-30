@@ -6,9 +6,7 @@ import {
   Files,
   FolderOpened,
   Grid,
-  Operation,
   SwitchButton,
-  Tools,
   User,
 } from "@element-plus/icons-vue";
 
@@ -21,9 +19,7 @@ const authStore = useAuthStore();
 const productNavItems = [
   { path: "/doc-translate/translate", label: "翻译", icon: Files },
   { path: "/doc-translate/history", label: "历史", icon: FolderOpened },
-  { path: "/doc-translate/glossary", label: "术语", icon: CollectionTag },
-  { path: "/doc-translate/memory", label: "记忆", icon: Operation },
-  { path: "/doc-translate/tools", label: "工具", icon: Tools },
+  { path: "/doc-translate/glossary", label: "词库", icon: CollectionTag },
 ];
 
 const activePath = computed(() => {
@@ -40,6 +36,11 @@ const canManageIam = computed(() => {
   return roleSet.has("admin") || roleSet.has("super_admin");
 });
 
+const canManageContractTasks = computed(() => {
+  const roleSet = new Set(authStore.user?.roles || []);
+  return roleSet.has("admin") || roleSet.has("super_admin");
+});
+
 function navigate(path: string) {
   if (route.path !== path) {
     router.push(path);
@@ -49,13 +50,6 @@ function navigate(path: string) {
 function handleLogout() {
   authStore.logout();
   router.replace("/login");
-}
-
-
-const isTranslatePage = computed(() => route.path.startsWith('/doc-translate/translate'));
-
-function goToTranslate() {
-  router.push('/doc-translate/translate');
 }
 </script>
 
@@ -89,11 +83,6 @@ function goToTranslate() {
       </nav>
 
       <div class="nav-footer">
-        <button class="logout-button" type="button" @click="handleLogout">
-          <el-icon><SwitchButton /></el-icon>
-          <span>退出登录</span>
-        </button>
-
         <el-dropdown class="profile-dropdown" trigger="click" placement="top-start">
           <button class="profile-entry" type="button">
             <el-icon><User /></el-icon>
@@ -101,7 +90,10 @@ function goToTranslate() {
           </button>
           <template #dropdown>
             <el-dropdown-menu>
-              <el-dropdown-item @click="navigate('/system/profile')">个人信息设置</el-dropdown-item>
+              <el-dropdown-item v-if="canManageIam" @click="navigate('/system/profile')">个人信息设置</el-dropdown-item>
+              <el-dropdown-item v-if="canManageContractTasks" @click="navigate('/system/contract-workflows')">
+                任务管理
+              </el-dropdown-item>
               <el-dropdown-item v-if="canManageIam" @click="navigate('/system/users')">用户管理</el-dropdown-item>
               <el-dropdown-item v-if="canManageIam" @click="navigate('/system/roles')">角色与权限</el-dropdown-item>
               <el-dropdown-item divided @click="handleLogout">
@@ -122,7 +114,7 @@ function goToTranslate() {
         </div>
 
         <div class="header-actions">
-          <button v-if="!isTranslatePage" class="ghost-action" type="button" @click="goToTranslate">
+          <button class="ghost-action" type="button" @click="navigate('/doc-translate/translate')">
             <el-icon><Grid /></el-icon>
             <span>返回翻译台</span>
           </button>

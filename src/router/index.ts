@@ -2,9 +2,11 @@ import { createRouter, createWebHistory } from "vue-router";
 
 import { useAuthStore } from "../stores/auth";
 import AppShell from "../layouts/AppShell.vue";
+import AdminLoginPage from "../modules/auth/views/AdminLoginPage.vue";
 import AuthCallbackPage from "../modules/auth/views/AuthCallbackPage.vue";
 import LoginPage from "../modules/auth/views/LoginPage.vue";
 import DocTranslatePage from "../modules/doc-translate/views/DocTranslatePage.vue";
+import AdminTaskManagementPage from "../modules/doc-translate/views/AdminTaskManagementPage.vue";
 import TranslateGlossaryPage from "../modules/doc-translate/views/TranslateGlossaryPage.vue";
 import TranslateHistoryPage from "../modules/doc-translate/views/TranslateHistoryPage.vue";
 import TranslateMemoryPage from "../modules/doc-translate/views/TranslateMemoryPage.vue";
@@ -23,6 +25,12 @@ const router = createRouter({
       name: "login",
       component: LoginPage,
       meta: { public: true, title: "平台登录" },
+    },
+    {
+      path: "/login/admin",
+      name: "login-admin",
+      component: AdminLoginPage,
+      meta: { public: true, title: "管理员测试登录" },
     },
     {
       path: "/auth/callback",
@@ -89,6 +97,12 @@ const router = createRouter({
           meta: { requiresAuth: true, title: "工具" },
         },
         {
+          path: "system/contract-workflows",
+          name: "system-contract-workflows",
+          component: AdminTaskManagementPage,
+          meta: { requiresAuth: true, requiresTaskAdmin: true, title: "任务管理" },
+        },
+        {
           path: "system/users",
           name: "system-users",
           component: UserManagementPage,
@@ -104,7 +118,7 @@ const router = createRouter({
           path: "system/profile",
           name: "system-profile",
           component: ProfileSettingsPage,
-          meta: { requiresAuth: true, title: "个人信息设置" },
+          meta: { requiresAuth: true, requiresAdmin: true, title: "个人信息设置" },
         },
       ],
     },
@@ -139,6 +153,13 @@ router.beforeEach(async (to) => {
   }
 
   if (to.meta.requiresAdmin) {
+    const roleSet = new Set(store.user?.roles || []);
+    if (!roleSet.has("admin") && !roleSet.has("super_admin")) {
+      return { path: "/doc-translate/translate" };
+    }
+  }
+
+  if (to.meta.requiresTaskAdmin) {
     const roleSet = new Set(store.user?.roles || []);
     if (!roleSet.has("admin") && !roleSet.has("super_admin")) {
       return { path: "/doc-translate/translate" };

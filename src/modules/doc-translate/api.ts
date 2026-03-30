@@ -99,6 +99,34 @@ interface ContractSubmitResponse {
   tb_set_name?: string | null;
 }
 
+interface InstantTextTranslateResponse {
+  translation: string;
+  engine: string;
+  src_lang: string;
+  tgt_lang: string;
+  tb_enabled?: boolean;
+  tb_set_name?: string | null;
+  tb_version?: number | null;
+  tb_rules?: number | null;
+  tb_hits?: number;
+}
+
+interface ContractInlineTranslateResponse {
+  translation: string;
+  engine_used: string;
+  primary_engine: string;
+  fallback_engine: string;
+  src_lang: string;
+  tgt_lang: string;
+  tb_enabled?: boolean;
+  tb_set_id?: number | null;
+  tb_set_name?: string | null;
+  tb_hits?: number;
+  tb_version?: number | null;
+  tb_rules?: number | null;
+  route?: string;
+}
+
 interface WorkflowQueryItem {
   workflow_id: string;
   source_filename?: string | null;
@@ -120,6 +148,53 @@ interface WorkflowQueryResponse {
   limit: number;
   offset: number;
   filters?: Dict;
+}
+
+interface AdminWorkflowQueryItem {
+  workflow_id: string;
+  status?: string | null;
+  mode?: string | null;
+  language_pair?: string | null;
+  owner_subject?: string | null;
+  owner_keycloak_user_id?: string | null;
+  owner_username?: string | null;
+  owner_display_name?: string | null;
+  owner_email?: string | null;
+  tenant_id?: string | null;
+  owner_user_id?: string | number | null;
+  created_at?: number | null;
+  updated_at?: number | null;
+}
+
+interface AdminWorkflowQueryResponse {
+  items: AdminWorkflowQueryItem[];
+  total: number;
+  limit: number;
+  offset: number;
+  filters?: Dict;
+  skipped_invalid_state?: number;
+}
+
+interface AdminWorkflowDeleteItem {
+  workflow_id: string;
+  owner_subject?: string | null;
+  status?: string | null;
+  deleted?: boolean;
+}
+
+interface AdminWorkflowDeleteSingleResponse extends AdminWorkflowDeleteItem {
+  ok: boolean;
+  requested_owner_subject?: string | null;
+}
+
+interface AdminWorkflowDeleteBatchResponse {
+  ok: boolean;
+  owner_subject: string;
+  matched: number;
+  deleted_count: number;
+  deleted_items: AdminWorkflowDeleteItem[];
+  skipped: Array<{ workflow_id: string; status_code?: number; reason?: string | null }>;
+  skipped_invalid_state?: number;
 }
 
 interface WorkflowDraftItem {
@@ -152,25 +227,6 @@ interface WorkflowArtifactBlobResponse {
   contentType: string | null;
 }
 
-// 更新合同工作流（例如设置 is_hidden 字段）
-export async function updateContractWorkflow(
-  token: string,
-  workflowId: string,
-  data: { is_hidden?: boolean }
-) {
-  const resp = await fetch(`/api/contract-workflows/${workflowId}`, {
-    method: 'PATCH',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(data),
-  });
-  if (!resp.ok) {
-    throw new Error(`update workflow failed: ${resp.status}`);
-  }
-  return resp.json();
-}
 function authHeaders(accessToken: string | null | undefined): AuthHeaders | undefined {
   const token = String(accessToken || "").trim();
   if (!token) {
@@ -397,6 +453,65 @@ async function submitContractText(
   return data;
 }
 
+async function translateNmtText(
+  accessToken: string | null | undefined,
+  payload: {
+    text: string;
+    src_lang: string;
+    tgt_lang: string;
+    tb_set_name?: string | null;
+    enable_tb?: boolean;
+  },
+): Promise<InstantTextTranslateResponse> {
+  const body: Dict = {
+    text: payload.text,
+    src_lang: payload.src_lang,
+    tgt_lang: payload.tgt_lang,
+    engine: "madlad",
+    enable_tb: Boolean(payload.enable_tb),
+  };
+
+  if (payload.tb_set_name) {
+    body.tb_set_name = payload.tb_set_name;
+  }
+
+  const { data } = await http.post<InstantTextTranslateResponse>("/nmt/translate_text", body, {
+    headers: authHeaders(accessToken),
+  });
+  return data;
+}
+
+async function translateContractTextInline(
+  accessToken: string | null | undefined,
+  payload: {
+    text: string;
+    src_lang: string;
+    tgt_lang: string;
+    primary_engine?: string;
+    fallback_engine?: string;
+    enable_tb?: boolean;
+    tb_set_id?: number | null;
+  },
+): Promise<ContractInlineTranslateResponse> {
+  const body: Dict = {
+    text: payload.text,
+    src_lang: payload.src_lang,
+    tgt_lang: payload.tgt_lang,
+    primary_engine: payload.primary_engine || "llm",
+    fallback_engine: payload.fallback_engine || "madlad",
+    enable_tb: Boolean(payload.enable_tb),
+  };
+
+  if (payload.tb_set_id) {
+    body.tb_set_id = payload.tb_set_id;
+  }
+
+  const { data } = await http.post<ContractInlineTranslateResponse>("/api/contract-translate/text-inline", body, {
+    headers: authHeaders(accessToken),
+  });
+  return data;
+}
+
 async function getContractWorkflowDetail(
   accessToken: string | null | undefined,
   workflowId: string,
@@ -501,8 +616,88 @@ async function applyContractWorkflowPatch(
   return data;
 }
 
+async function queryContractAdminWorkflowsByOwner(
+  accessToken: string | null | undefined,
+  params?: {
+    owner_subject?: string;
+    owner_keyword?: string;
+    owner_missing?: boolean;
+    status?: string;
+    limit?: number;
+    offset?: number;
+  },
+): Promise<AdminWorkflowQueryResponse> {
+  const { data } = await http.get<AdminWorkflowQueryResponse>("/api/contract-translate/admin/workflows/owners", {
+    headers: authHeaders(accessToken),
+    params,
+  });
+  return {
+    items: data.items || [],
+    total: Number(data.total || 0),
+    limit: Number(data.limit || params?.limit || 20),
+    offset: Number(data.offset || params?.offset || 0),
+    filters: data.filters || {},
+    skipped_invalid_state: Number(data.skipped_invalid_state || 0),
+  };
+}
+
+async function deleteContractAdminWorkflowById(
+  accessToken: string | null | undefined,
+  workflowId: string,
+): Promise<AdminWorkflowDeleteSingleResponse> {
+  const { data } = await http.delete<AdminWorkflowDeleteSingleResponse>(
+    `/api/contract-translate/admin/workflows/${encodeURIComponent(workflowId)}`,
+    {
+      headers: authHeaders(accessToken),
+    },
+  );
+  return data;
+}
+
+async function deleteContractAdminWorkflowForOwner(
+  accessToken: string | null | undefined,
+  ownerSubject: string,
+  workflowId: string,
+): Promise<AdminWorkflowDeleteSingleResponse> {
+  const { data } = await http.delete<AdminWorkflowDeleteSingleResponse>(
+    `/api/contract-translate/admin/workflows/by-owner/${encodeURIComponent(ownerSubject)}/${encodeURIComponent(workflowId)}`,
+    {
+      headers: authHeaders(accessToken),
+    },
+  );
+  return data;
+}
+
+async function deleteContractAdminWorkflowsForOwner(
+  accessToken: string | null | undefined,
+  ownerSubject: string,
+): Promise<AdminWorkflowDeleteBatchResponse> {
+  const { data } = await http.delete<AdminWorkflowDeleteBatchResponse>(
+    `/api/contract-translate/admin/workflows/by-owner/${encodeURIComponent(ownerSubject)}`,
+    {
+      headers: authHeaders(accessToken),
+    },
+  );
+  return {
+    ok: Boolean(data.ok),
+    owner_subject: String(data.owner_subject || ownerSubject),
+    matched: Number(data.matched || 0),
+    deleted_count: Number(data.deleted_count || 0),
+    deleted_items: data.deleted_items || [],
+    skipped: data.skipped || [],
+    skipped_invalid_state: Number(data.skipped_invalid_state || 0),
+  };
+}
+
 export type {
+  AdminWorkflowDeleteBatchResponse,
+  AdminWorkflowDeleteItem,
+  AdminWorkflowDeleteSingleResponse,
+  AdminWorkflowQueryItem,
+  AdminWorkflowQueryResponse,
   ContractSubmitResponse,
+  ContractInlineTranslateResponse,
+  InstantTextTranslateResponse,
   TermbaseEntryCreatePayload,
   TermbaseEntryItem,
   TermbaseEntryListResponse,
@@ -522,6 +717,9 @@ export {
   applyContractWorkflowPatch,
   createTermbaseEntry,
   createTermbaseSet,
+  deleteContractAdminWorkflowById,
+  deleteContractAdminWorkflowForOwner,
+  deleteContractAdminWorkflowsForOwner,
   deleteTermbaseEntry,
   deleteTermbaseSet,
   fetchContractWorkflowArtifactBlob,
@@ -531,9 +729,12 @@ export {
   importTermbaseCsv,
   listTermbaseEntries,
   listTermbaseSets,
+  queryContractAdminWorkflowsByOwner,
   queryContractWorkflows,
   submitContractDocx,
   submitContractText,
+  translateContractTextInline,
+  translateNmtText,
   updateTermbaseEntry,
   updateTermbaseSet,
 };
