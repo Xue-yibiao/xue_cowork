@@ -176,10 +176,6 @@ function openHistory() {
   router.push("/doc-translate/history");
 }
 
-function openGlossary() {
-  router.push("/doc-translate/glossary");
-}
-
 const beforeUploadDocx: UploadProps["beforeUpload"] = (rawFile) => {
   if (hasActiveWorkflow.value) {
     ElMessage.warning("当前已有进行中的翻译任务，完成后才能继续提交");
@@ -348,7 +344,7 @@ onBeforeUnmount(() => {
           上传文档
         </button>
         <button :class="['mode-pill', { 'is-active': workspaceMode === 'text' }]" type="button" @click="workspaceMode = 'text'">
-          输入文字
+          文本翻译
         </button>
       </div>
 
@@ -356,17 +352,6 @@ onBeforeUnmount(() => {
         <el-select v-model="selectedLangPair" class="settings-select settings-select--lang" placeholder="翻译方向">
           <el-option v-for="item in langPairOptions" :key="item.value" :label="item.label" :value="item.value" />
         </el-select>
-        <el-select
-          v-model="tbSetId"
-          class="settings-select settings-select--tb"
-          placeholder="选择词库"
-          clearable
-          :disabled="!enableTb || loadingTb"
-        >
-          <el-option v-for="item in tbSetOptions" :key="item.id" :label="item.name" :value="item.id" />
-        </el-select>
-        <el-checkbox v-model="enableTb" class="settings-check">使用词库</el-checkbox>
-        <button class="glossary-link" type="button" @click="openGlossary">管理词库</button>
       </div>
 
       <div class="compose-board">
@@ -410,7 +395,7 @@ onBeforeUnmount(() => {
                 <el-icon class="upload-icon"><ArrowUp /></el-icon>
                 <div class="upload-title">点击选择或拖拽文件到这里</div>
                 <div class="upload-note">
-                  当前前端支持 `.docx` 与图片型 `.pdf`；PDF 将通过 OCR 识别，处理耗时会更长。
+                  仅支持word文档和pdf文件，处理时间较长时请耐心等待。
                 </div>
               </el-upload>
             </div>
@@ -573,11 +558,9 @@ onBeforeUnmount(() => {
 
 .translate-settings {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  grid-template-areas:
-    "lang tb"
-    "check link";
-  gap: 12px;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "lang";
+  gap: 0;
   align-items: center;
 }
 

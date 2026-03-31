@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
-import { Close, Delete, DocumentCopy, Search } from "@element-plus/icons-vue";
+import { Close, Search } from "@element-plus/icons-vue";
 
 import { useAuthStore } from "../../../stores/auth";
 import {
@@ -45,10 +45,7 @@ const searchKeyword = ref("");
 const pendingPatches = ref<Record<string, string>>({});
 const editingBlockId = ref("");
 const editingText = ref("");
-const currentPage = ref(1);
-const pageSize = ref(10);
 const fontScale = ref(1);
-const importInputRef = ref<HTMLInputElement | null>(null);
 
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -101,12 +98,6 @@ const filteredDraftItems = computed(() => {
   });
 });
 
-const paginatedDraftItems = computed(() => {
-  const start = (currentPage.value - 1) * pageSize.value;
-  return filteredDraftItems.value.slice(start, start + pageSize.value);
-});
-
-const currentPageOffset = computed(() => (currentPage.value - 1) * pageSize.value);
 const typographyStyle = computed(() => ({ "--review-font-scale": String(fontScale.value) }));
 
 function stopPolling() {
@@ -194,131 +185,12 @@ function confirmEditing() {
   applyEditingToDirtyMap({ clearAfter: true });
 }
 
-async function copyBaseTranslation() {
-  if (!editingBlockId.value) {
-    return;
-  }
-  const baseTranslation = translationForBlock(editingBlockId.value);
-  editingText.value = baseTranslation;
-  try {
-    await navigator.clipboard.writeText(baseTranslation);
-    ElMessage.success("已复制原译文");
-  } catch {
-    ElMessage.success("已恢复原译文");
-  }
-}
-
-function removeCurrentRevision() {
-  if (!editingBlockId.value) {
-    return;
-  }
-  const blockId = editingBlockId.value;
-  const next = { ...pendingPatches.value };
-  delete next[blockId];
-  pendingPatches.value = next;
-  editingText.value = translationForBlock(blockId);
-  ElMessage.success("已移除当前修订");
-}
-
 function clearAllRevisions() {
   pendingPatches.value = {};
   if (editingBlockId.value) {
     editingText.value = translationForBlock(editingBlockId.value);
   }
   ElMessage.success("已清除所有本地修订");
-}
-
-function exportRevisions() {
-  if (!dirtyCount.value) {
-    ElMessage.warning("当前没有可导出的修订");
-    return;
-  }
-  const payload = {
-    workflow_id: normalizedWorkflowId.value,
-    exported_at: new Date().toISOString(),
-    patches: Object.entries(pendingPatches.value).map(([block_id, translation]) => ({ block_id, translation })),
-  };
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-  const url = window.URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = `${normalizedWorkflowId.value || "review"}-patches.json`;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  window.setTimeout(() => window.URL.revokeObjectURL(url), 1000);
-}
-
-function triggerImport() {
-  importInputRef.value?.click();
-}
-
-function parseImportedPatches(raw: unknown): Array<{ block_id: string; translation: string }> {
-  if (Array.isArray(raw)) {
-    return raw
-      .map((item) => ({
-        block_id: String((item as Dict)?.block_id || "").trim(),
-        translation: String((item as Dict)?.translation || ""),
-      }))
-      .filter((item) => item.block_id);
-  }
-
-  if (raw && typeof raw === "object") {
-    const dict = raw as Dict;
-    if (Array.isArray(dict.patches)) {
-      return parseImportedPatches(dict.patches);
-    }
-    if (Array.isArray(dict.items)) {
-      return parseImportedPatches(dict.items);
-    }
-  }
-
-  return [];
-}
-
-async function onImportFileChange(event: Event) {
-  const target = event.target as HTMLInputElement | null;
-  const file = target?.files?.[0];
-  if (!file) {
-    return;
-  }
-
-  try {
-    const content = await file.text();
-    const parsed = JSON.parse(content);
-    const importedPatches = parseImportedPatches(parsed);
-    if (!importedPatches.length) {
-      ElMessage.warning("导入文件中没有可识别的修订");
-      return;
-    }
-
-    const availableIds = new Set(draftItems.value.map((item) => item.block_id));
-    const next = { ...pendingPatches.value };
-    let applied = 0;
-    for (const item of importedPatches) {
-      if (!availableIds.has(item.block_id)) {
-        continue;
-      }
-      next[item.block_id] = item.translation;
-      applied += 1;
-    }
-
-    if (!applied) {
-      ElMessage.warning("导入的修订没有匹配到当前任务块");
-      return;
-    }
-
-    pendingPatches.value = next;
-    activeTab.value = "patched";
-    ElMessage.success(`已导入 ${applied} 条修订`);
-  } catch (error) {
-    console.error(error);
-    ElMessage.error("导入修订失败，请检查 JSON 格式");
-  } finally {
-    if (target) {
-      target.value = "";
-    }
-  }
 }
 
 function closePanel() {
@@ -423,18 +295,6 @@ async function submitReview() {
   }
 }
 
-function decreaseFontScale() {
-  fontScale.value = Math.max(0.9, Number((fontScale.value - 0.05).toFixed(2)));
-}
-
-function resetFontScale() {
-  fontScale.value = 1;
-}
-
-function increaseFontScale() {
-  fontScale.value = Math.min(1.2, Number((fontScale.value + 0.05).toFixed(2)));
-}
-
 function handleHeaderMouseDown(event: MouseEvent) {
   if (!props.floating) {
     return;
@@ -452,7 +312,6 @@ watch(
     stopPolling();
     activeTab.value = "translations";
     searchKeyword.value = "";
-    currentPage.value = 1;
     editingBlockId.value = "";
     editingText.value = "";
     pendingPatches.value = {};
@@ -465,22 +324,6 @@ watch(searchKeyword, () => {
   if (editingBlockId.value && hasPendingEditChanges()) {
     applyEditingToDirtyMap({ silent: true });
   }
-  currentPage.value = 1;
-});
-
-watch(pageSize, () => {
-  if (editingBlockId.value && hasPendingEditChanges()) {
-    applyEditingToDirtyMap({ silent: true });
-  }
-  currentPage.value = 1;
-});
-
-watch(currentPage, () => {
-  if (editingBlockId.value && hasPendingEditChanges()) {
-    applyEditingToDirtyMap({ silent: true });
-  }
-  editingBlockId.value = "";
-  editingText.value = "";
 });
 
 watch(activeTab, () => {
@@ -492,17 +335,6 @@ watch(activeTab, () => {
     editingText.value = "";
   }
 });
-
-watch(
-  filteredDraftItems,
-  (rows) => {
-    const totalPages = Math.max(1, Math.ceil(rows.length / pageSize.value));
-    if (currentPage.value > totalPages) {
-      currentPage.value = totalPages;
-    }
-  },
-  { immediate: true },
-);
 
 onMounted(() => {
   if (workflowStatus.value === "RUNNING") {
@@ -523,14 +355,21 @@ onBeforeUnmount(() => {
     v-loading="loading"
   >
     <div class="workspace-topbar" @mousedown="handleHeaderMouseDown">
-      <div class="workspace-tabs">
-        <button :class="['workspace-tab', { 'is-active': activeTab === 'translations' }]" type="button" @click="activeTab = 'translations'">
-          译文
-        </button>
-        <button :class="['workspace-tab', { 'is-active': activeTab === 'patched' }]" type="button" @click="activeTab = 'patched'">
-          已修订
-          <span v-if="dirtyCount" class="tab-count">{{ dirtyCount }}</span>
-        </button>
+      <div class="topbar-main">
+        <div class="workspace-tabs">
+          <button :class="['workspace-tab', { 'is-active': activeTab === 'translations' }]" type="button" @click="activeTab = 'translations'">
+            译文
+          </button>
+          <button :class="['workspace-tab', { 'is-active': activeTab === 'patched' }]" type="button" @click="activeTab = 'patched'">
+            已修订
+            <span v-if="dirtyCount" class="tab-count">{{ dirtyCount }}</span>
+          </button>
+        </div>
+
+        <div class="search-shell topbar-search">
+          <el-icon><Search /></el-icon>
+          <input v-model="searchKeyword" type="text" placeholder="输入关键字搜索" />
+        </div>
       </div>
 
       <button v-if="floating" class="panel-close" type="button" @click="closePanel">
@@ -544,23 +383,9 @@ onBeforeUnmount(() => {
       </div>
 
       <template v-if="activeTab === 'translations'">
-        <div class="translation-toolbar">
-          <div class="search-shell">
-            <el-icon><Search /></el-icon>
-            <input v-model="searchKeyword" type="text" placeholder="输入关键字搜索" />
-          </div>
-
-          <div class="toolbar-meta">
-            <button type="button" class="meta-button" @click="decreaseFontScale">Aa</button>
-            <button type="button" class="meta-button is-active" @click="resetFontScale">ab</button>
-            <button type="button" class="meta-button" @click="increaseFontScale">*</button>
-            <span class="meta-count">{{ filteredDraftItems.length }}</span>
-          </div>
-        </div>
-
         <div class="translation-flow">
           <article
-            v-for="(item, index) in paginatedDraftItems"
+            v-for="item in filteredDraftItems"
             :key="item.block_id"
             class="translation-card"
             :class="{
@@ -569,7 +394,6 @@ onBeforeUnmount(() => {
             }"
           >
             <div class="card-title">
-              <span>#{{ currentPageOffset + index + 1 }}</span>
               <div class="card-badges">
                 <span v-if="qaHitSet.has(item.block_id)" class="badge badge-warning">QA</span>
                 <span v-if="item.manual_patch_id" class="badge badge-applied">已应用</span>
@@ -577,41 +401,39 @@ onBeforeUnmount(() => {
               </div>
             </div>
 
-            <p class="card-source">{{ item.source_text || "-" }}</p>
+            <div class="translation-pair">
+              <section class="pair-pane pair-pane--source">
+                <header class="pair-label">原文</header>
+                <p class="card-source">{{ item.source_text || "-" }}</p>
+              </section>
 
-            <div v-if="item.block_id !== editingBlockId" class="card-translation-shell">
-              <button
-                :class="['card-translation', { 'is-highlighted': isDirty(item.block_id) || Boolean(item.manual_patch_id) }]"
-                type="button"
-                :disabled="!isEditable"
-                @click="beginEditing(item.block_id)"
-              >
-                {{ item.mergedTranslation || "暂无译文" }}
-              </button>
-            </div>
-
-            <div v-else class="card-editor">
-              <textarea v-model="editingText" rows="5" />
-              <p class="editor-hint">\n 代表换行，且只有当原文译文中 \n 数量相同时才生效；尽可能保留 \t 等特殊字符</p>
-              <div class="editor-actions">
-                <div class="editor-actions-left">
-                  <button type="button" class="ghost-action" @click="copyBaseTranslation">
-                    <el-icon><DocumentCopy /></el-icon>
-                    <span>复制原译文</span>
-                  </button>
-                  <button type="button" class="icon-action" @click="removeCurrentRevision">
-                    <el-icon><Delete /></el-icon>
+              <section class="pair-pane pair-pane--translation">
+                <header class="pair-label">译文</header>
+                <div v-if="item.block_id !== editingBlockId" class="card-translation-shell">
+                  <button
+                    :class="['card-translation', { 'is-highlighted': isDirty(item.block_id) || Boolean(item.manual_patch_id) }]"
+                    type="button"
+                    :disabled="!isEditable"
+                    @click="beginEditing(item.block_id)"
+                  >
+                    {{ item.mergedTranslation || "暂无译文" }}
                   </button>
                 </div>
-                <div class="editor-actions-right">
-                  <button type="button" class="ghost-action" @click="cancelEditing">取消</button>
-                  <button type="button" class="primary-action" @click="confirmEditing">确定</button>
+
+                <div v-else class="card-editor">
+                  <textarea v-model="editingText" rows="5" />
+                  <div class="editor-actions">
+                    <div class="editor-actions-right editor-actions-right--compact">
+                      <button type="button" class="ghost-action" @click="cancelEditing">取消</button>
+                      <button type="button" class="primary-action" @click="confirmEditing">确定</button>
+                    </div>
+                  </div>
                 </div>
-              </div>
+              </section>
             </div>
           </article>
 
-          <el-empty v-if="!paginatedDraftItems.length" description="没有匹配到可展示的译文块" />
+          <el-empty v-if="!filteredDraftItems.length" description="没有匹配到可展示的译文块" />
         </div>
       </template>
 
@@ -622,12 +444,19 @@ onBeforeUnmount(() => {
         </div>
 
         <div class="patched-flow">
-          <article v-for="(item, index) in revisedItems" :key="`patched-${item.block_id}`" class="patched-card">
+          <article v-for="item in revisedItems" :key="`patched-${item.block_id}`" class="patched-card">
             <div class="card-title">
-              <span>#{{ index + 1 }}</span>
             </div>
-            <p class="card-source">{{ item.source_text || "-" }}</p>
-            <div class="patched-translation">{{ item.mergedTranslation || "-" }}</div>
+            <div class="translation-pair">
+              <section class="pair-pane pair-pane--source">
+                <header class="pair-label">原文</header>
+                <p class="card-source">{{ item.source_text || "-" }}</p>
+              </section>
+              <section class="pair-pane pair-pane--translation">
+                <header class="pair-label">译文</header>
+                <div class="patched-translation">{{ item.mergedTranslation || "-" }}</div>
+              </section>
+            </div>
           </article>
 
           <el-empty v-if="!revisedItems.length" description="当前还没有本地修订" />
@@ -637,25 +466,6 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="workspace-footer">
-      <div class="footer-actions">
-        <button type="button" class="ghost-action" @click="exportRevisions">导出</button>
-        <button type="button" class="ghost-action" @click="triggerImport">导入</button>
-        <input ref="importInputRef" class="hidden-input" type="file" accept="application/json" @change="onImportFileChange" />
-      </div>
-
-      <div class="pagination-shell">
-        <el-pagination
-          v-if="activeTab === 'translations' && filteredDraftItems.length"
-          v-model:current-page="currentPage"
-          v-model:page-size="pageSize"
-          background
-          layout="prev, pager, next, sizes"
-          :page-sizes="[10, 20, 50, 100]"
-          :pager-count="5"
-          :total="filteredDraftItems.length"
-        />
-      </div>
-
       <button type="button" class="submit-action" :disabled="!dirtyCount || !isEditable" @click="submitReview">
         {{ submitting ? "重新生成中..." : "重新生成译文" }}
       </button>
@@ -680,23 +490,31 @@ onBeforeUnmount(() => {
 }
 
 .workspace-topbar {
-  min-height: 74px;
-  padding: 0 24px;
+  min-height: 64px;
+  padding: 0 20px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 16px;
+  gap: 12px;
   border-bottom: 1px solid rgba(103, 80, 164, 0.12);
   user-select: none;
+}
+
+.topbar-main {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
 }
 
 .workspace-tabs {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
   gap: 18px;
   min-width: 0;
+  flex-shrink: 0;
 }
 
 .workspace-tab,
@@ -717,7 +535,7 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 74px;
+  height: 64px;
   padding: 0 4px;
   font-size: 16px;
   color: var(--text-700);
@@ -755,35 +573,20 @@ onBeforeUnmount(() => {
 
 .workspace-body {
   min-height: 0;
-  padding: 18px 24px 16px;
+  padding: 12px 20px 12px;
   display: grid;
   grid-auto-rows: min-content;
-  gap: 16px;
+  gap: 12px;
   overflow-y: auto;
   overflow-x: hidden;
 }
 
-.status-banner {
-  padding: 10px 14px;
-  border-radius: 12px;
-  background: #fff7d4;
-  color: #7a6214;
-  font-size: 13px;
-}
-
-.translation-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 16px;
-}
-
 .search-shell {
-  flex: 1;
-  min-width: 220px;
-  height: 42px;
-  padding: 0 14px;
+  flex: 1 1 320px;
+  min-width: 260px;
+  max-width: 100%;
+  height: 40px;
+  padding: 0 12px;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -801,30 +604,6 @@ onBeforeUnmount(() => {
   font-size: 14px;
 }
 
-.toolbar-meta {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 10px;
-  color: var(--text-700);
-}
-
-.meta-button {
-  padding: 0;
-  color: var(--text-700);
-  font-size: 14px;
-}
-
-.meta-button.is-active {
-  text-decoration: underline;
-}
-
-.meta-count {
-  min-width: 28px;
-  text-align: right;
-}
-
 .translation-flow,
 .patched-flow,
 .notes-list {
@@ -832,7 +611,7 @@ onBeforeUnmount(() => {
   overflow: visible;
   padding-right: 6px;
   display: grid;
-  gap: 18px;
+  gap: 10px;
   align-content: start;
 }
 
@@ -841,14 +620,14 @@ onBeforeUnmount(() => {
 .summary-card,
 .note-card {
   display: grid;
-  gap: 10px;
+  gap: 8px;
   font-size: calc(15px * var(--review-font-scale));
 }
 
 .card-title {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
+  align-items: center;
+  justify-content: flex-end;
   gap: 12px;
   font-weight: 500;
   color: #34303f;
@@ -888,20 +667,41 @@ onBeforeUnmount(() => {
 
 .card-source {
   margin: 0;
-  padding-left: 12px;
   color: #6e6a78;
   white-space: pre-wrap;
   line-height: 1.7;
 }
 
-.card-translation-shell {
-  padding-left: 12px;
+.translation-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.pair-pane {
+  min-height: 54px;
+  display: grid;
+  grid-template-rows: auto minmax(84px, auto);
+  gap: 6px;
+}
+
+.pair-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #7a7588;
+  letter-spacing: 0.02em;
+}
+
+.card-translation-shell,
+.card-editor {
+  min-height: 56px;
 }
 
 .card-translation,
 .patched-translation {
   width: 100%;
-  padding: 12px 14px;
+  padding: 10px 12px;
   border-radius: 6px;
   background: #f6f7fb;
   color: #38334a;
@@ -926,7 +726,6 @@ onBeforeUnmount(() => {
 }
 
 .card-editor {
-  padding-left: 12px;
   display: grid;
   gap: 12px;
 }
@@ -947,6 +746,10 @@ onBeforeUnmount(() => {
   margin: 0;
   color: #7a7588;
   font-size: 13px;
+}
+
+.editor-actions-right--compact {
+  margin-left: auto;
 }
 
 .editor-actions,
@@ -1016,7 +819,7 @@ onBeforeUnmount(() => {
 .note-card {
   border: 1px solid rgba(103, 80, 164, 0.1);
   border-radius: 16px;
-  padding: 18px;
+  padding: 9px;
   background: #fff;
 }
 
@@ -1038,16 +841,11 @@ onBeforeUnmount(() => {
 
 .workspace-footer {
   flex-shrink: 0;
-  padding: 14px 24px 18px;
+  padding: 10px 20px 12px;
   border-top: 1px solid rgba(103, 80, 164, 0.12);
   background: #ffffff;
-}
-
-.pagination-shell {
-  flex: 1 1 260px;
-  min-width: 0;
   display: flex;
-  justify-content: center;
+  justify-content: flex-end;
 }
 
 .submit-action {
@@ -1072,21 +870,21 @@ onBeforeUnmount(() => {
     padding-right: 18px;
   }
 
-  .translation-toolbar,
+  .topbar-main,
   .workspace-footer,
   .editor-actions {
-    grid-template-columns: 1fr;
     flex-direction: column;
     align-items: stretch;
   }
 
-  .toolbar-meta,
-  .footer-actions {
-    justify-content: space-between;
+  .translation-pair {
+    grid-template-columns: 1fr;
+    gap: 10px;
   }
 
-  .pagination-shell {
-    justify-content: flex-start;
+  .pair-pane {
+    min-height: 0;
+    grid-template-rows: auto auto;
   }
 }
 </style>

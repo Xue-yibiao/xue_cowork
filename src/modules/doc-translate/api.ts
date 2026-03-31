@@ -227,6 +227,11 @@ interface WorkflowArtifactBlobResponse {
   contentType: string | null;
 }
 
+interface WorkflowArtifactDataResponse {
+  data: Uint8Array;
+  contentType: string | null;
+}
+
 function authHeaders(accessToken: string | null | undefined): AuthHeaders | undefined {
   const token = String(accessToken || "").trim();
   if (!token) {
@@ -562,6 +567,25 @@ async function fetchContractWorkflowArtifactBlob(
   };
 }
 
+async function fetchContractWorkflowArtifactData(
+  accessToken: string | null | undefined,
+  workflowId: string,
+  artifactKey: WorkflowArtifactKey,
+): Promise<WorkflowArtifactDataResponse> {
+  const resp = await http.get<ArrayBuffer>(
+    `/api/contract-translate/workflows/${encodeURIComponent(workflowId)}/files/${encodeURIComponent(artifactKey)}`,
+    {
+      headers: authHeaders(accessToken),
+      responseType: "arraybuffer",
+    },
+  );
+
+  return {
+    data: new Uint8Array(resp.data),
+    contentType: String(resp.headers["content-type"] || "") || null,
+  };
+}
+
 async function getContractWorkflowReviewPayload(
   accessToken: string | null | undefined,
   workflowId: string,
@@ -723,6 +747,7 @@ export {
   deleteTermbaseEntry,
   deleteTermbaseSet,
   fetchContractWorkflowArtifactBlob,
+  fetchContractWorkflowArtifactData,
   getContractWorkflowDetail,
   getContractWorkflowDraft,
   getContractWorkflowReviewPayload,

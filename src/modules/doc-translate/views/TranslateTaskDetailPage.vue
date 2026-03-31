@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onUnmounted, ref, shallowRef, watch } from "vue";
 import { useRoute } from "vue-router";
 import { ElMessage } from "element-plus";
 import { Download, EditPen } from "@element-plus/icons-vue";
@@ -9,6 +9,7 @@ import PdfCanvasViewer from "../components/PdfCanvasViewer.vue";
 import TranslateReviewWorkspace from "../components/TranslateReviewWorkspace.vue";
 import {
   fetchContractWorkflowArtifactBlob,
+  fetchContractWorkflowArtifactData,
   getContractWorkflowDetail,
   type WorkflowArtifactKey,
 } from "../api";
@@ -22,8 +23,8 @@ const workflowId = computed(() => String(route.params.workflowId || "").trim());
 
 const workflowDetail = ref<Dict | null>(null);
 const loadingPreview = ref(false);
-const sourcePreviewUrl = ref("");
-const translatedPreviewUrl = ref("");
+const sourcePreviewData = shallowRef<Uint8Array | null>(null);
+const translatedPreviewData = shallowRef<Uint8Array | null>(null);
 const downloadingArtifactKey = ref<WorkflowArtifactKey | "">("");
 const lastLoadedTranslatedStatus = ref("");
 const reviewVisible = ref(false);
@@ -42,20 +43,12 @@ let resizeStartWidth = 0;
 let resizeStartHeight = 0;
 
 const REVIEW_MIN_WIDTH = 720;
-const REVIEW_MIN_HEIGHT = 520;
+const REVIEW_MIN_HEIGHT = 260;
 const REVIEW_EDGE_GAP = 12;
 
-function revokeUrl(value: string) {
-  if (value) {
-    window.URL.revokeObjectURL(value);
-  }
-}
-
 function cleanupPreviews() {
-  revokeUrl(sourcePreviewUrl.value);
-  revokeUrl(translatedPreviewUrl.value);
-  sourcePreviewUrl.value = "";
-  translatedPreviewUrl.value = "";
+  sourcePreviewData.value = null;
+  translatedPreviewData.value = null;
 }
 
 function stopPolling() {
@@ -203,9 +196,9 @@ const detailFilename = computed(() =>
 );
 const canReview = computed(() => Boolean(workflowDetail.value?.review) || detailStatus.value === "WAIT_REVIEW");
 
-async function loadPreviewBlob(artifactKey: WorkflowArtifactKey): Promise<string> {
-  const { blob } = await fetchContractWorkflowArtifactBlob(accessToken.value, workflowId.value, artifactKey);
-  return window.URL.createObjectURL(blob);
+async function loadPreviewData(artifactKey: WorkflowArtifactKey): Promise<Uint8Array> {
+  const { data } = await fetchContractWorkflowArtifactData(accessToken.value, workflowId.value, artifactKey);
+  return data;
 }
 
 async function loadDetail() {
@@ -243,8 +236,8 @@ async function loadPreviews() {
 
   loadingPreview.value = true;
   try {
-    if (!sourcePreviewUrl.value && detailArtifacts.value.source_pdf) {
-      sourcePreviewUrl.value = await loadPreviewBlob("source_pdf");
+    if (!sourcePreviewData.value && detailArtifacts.value.source_pdf) {
+      sourcePreviewData.value = await loadPreviewData("source_pdf");
     }
 
     const status = detailStatus.value;
@@ -252,18 +245,16 @@ async function loadPreviews() {
     const shouldReloadTranslated =
       translatedReady &&
       detailArtifacts.value.translated_pdf &&
-      (status !== lastLoadedTranslatedStatus.value || !translatedPreviewUrl.value);
+      (status !== lastLoadedTranslatedStatus.value || !translatedPreviewData.value);
 
     if (shouldReloadTranslated) {
-      revokeUrl(translatedPreviewUrl.value);
-      translatedPreviewUrl.value = "";
-      translatedPreviewUrl.value = await loadPreviewBlob("translated_pdf");
+      translatedPreviewData.value = null;
+      translatedPreviewData.value = await loadPreviewData("translated_pdf");
       lastLoadedTranslatedStatus.value = status;
     }
 
     if (status === "RUNNING") {
-      revokeUrl(translatedPreviewUrl.value);
-      translatedPreviewUrl.value = "";
+      translatedPreviewData.value = null;
     }
   } catch (error) {
     console.error(error);
@@ -356,15 +347,14 @@ watch(reviewVisible, (visible) => {
   <div class="task-detail-page">
     <header class="task-header">
       <div class="task-title">
-        <p class="title-eyebrow">任务详情</p>
+        <div class="task-meta">
+          <span class="title-eyebrow">任务详情</span>
+          <span class="task-lang">{{ detailLanguagePair }}</span>
+        </div>
         <h2>{{ detailFilename }}</h2>
-        <p>{{ detailLanguagePair }}</p>
       </div>
 
       <div class="task-actions">
-        <el-button :icon="Download" :loading="downloadingArtifactKey === 'translated_docx'" @click="downloadArtifact('translated_docx')">
-          下载 DOCX
-        </el-button>
         <el-button type="primary" :icon="EditPen" :disabled="!canReview" @click="goReview">人工修订</el-button>
       </div>
     </header>
@@ -375,9 +365,8 @@ watch(reviewVisible, (visible) => {
           <strong>原文</strong>
           <el-tag size="small">{{ detailStatus }}</el-tag>
         </div>
-        <div class="preview-banner">在线展示仅用于快速预览，请下载查看真实排版效果</div>
         <div class="preview-body" v-loading="loadingPreview">
-          <PdfCanvasViewer :src="sourcePreviewUrl" empty-text="原文 PDF 暂不可用" />
+          <PdfCanvasViewer :data="sourcePreviewData" empty-text="原文 PDF 暂不可用" />
         </div>
       </article>
 
@@ -387,18 +376,25 @@ watch(reviewVisible, (visible) => {
           <div class="column-actions">
             <el-button
               size="small"
-              type="success"
               plain
               :loading="downloadingArtifactKey === 'translated_pdf'"
               @click="downloadArtifact('translated_pdf')"
             >
               下载 PDF
             </el-button>
+            <el-button
+              size="small"
+              plain
+              :icon="Download"
+              :loading="downloadingArtifactKey === 'translated_docx'"
+              @click="downloadArtifact('translated_docx')"
+            >
+              下载 Word
+            </el-button>
           </div>
         </div>
-        <div class="preview-banner">在线展示仅用于快速预览，请下载查看 DOCX 文件的真正排版效果</div>
         <div class="preview-body translated" v-loading="loadingPreview">
-          <PdfCanvasViewer :src="translatedPreviewUrl" empty-text="译文 PDF 暂不可用" />
+          <PdfCanvasViewer :data="translatedPreviewData" empty-text="译文 PDF 暂不可用" />
         </div>
       </article>
     </section>
@@ -429,8 +425,11 @@ watch(reviewVisible, (visible) => {
 <style scoped>
 .task-detail-page {
   display: grid;
-  gap: 18px;
-  min-height: calc(100vh - 132px);
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 6px;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .task-header,
@@ -442,11 +441,11 @@ watch(reviewVisible, (visible) => {
 }
 
 .task-header {
-  padding: 22px 24px;
+  padding: 6px 12px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 6px;
 }
 
 .task-title {
@@ -454,24 +453,30 @@ watch(reviewVisible, (visible) => {
   flex: 1;
 }
 
-.title-eyebrow {
-  margin: 0 0 6px;
-  font-size: 12px;
-  color: var(--text-500);
+.task-meta {
+  margin: 0 0 1px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
 }
 
-.task-title h2 {
-  margin: 0 0 8px;
-  font-size: 28px;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.title-eyebrow {
+  font-size: 11px;
+  color: var(--text-500);
   white-space: nowrap;
 }
 
-.task-title p:last-child {
-  margin: 0;
+.task-lang {
+  font-size: 11px;
   color: var(--text-500);
+  white-space: nowrap;
+}
+
+.task-title h2 {
+  margin: 0;
+  font-size: 17px;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -482,7 +487,7 @@ watch(reviewVisible, (visible) => {
   align-items: center;
   justify-content: flex-end;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 6px;
   flex-shrink: 0;
   min-width: 0;
 }
@@ -490,43 +495,43 @@ watch(reviewVisible, (visible) => {
 .detail-layout {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 18px;
-  min-height: calc(100vh - 248px);
+  gap: 6px;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
 }
 
 .preview-column {
   overflow: hidden;
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
+  min-height: 0;
 }
 
 .column-header {
-  padding: 18px 20px 12px;
+  padding: 12px 16px 8px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px;
+}
+
+.column-header strong {
+  font-size: 15px;
 }
 
 .column-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
-}
-
-.preview-banner {
-  margin: 0 20px 12px;
-  padding: 12px 14px;
-  border-radius: 12px;
-  background: #fff3c4;
-  color: #6a5610;
-  font-size: 13px;
+  gap: 6px;
 }
 
 .preview-body {
   min-height: 0;
   height: 100%;
   background: #ffffff;
+  overflow: hidden;
+  border-top: 1px solid rgba(103, 80, 164, 0.08);
 }
 
 .preview-body.translated {
@@ -536,7 +541,7 @@ watch(reviewVisible, (visible) => {
 .review-floating-window {
   position: fixed;
   z-index: 2000;
-  min-height: 560px;
+  min-height: 260px;
   min-width: 720px;
   max-width: calc(100vw - 24px);
   max-height: calc(100vh - 24px);
@@ -571,11 +576,13 @@ watch(reviewVisible, (visible) => {
 
   .detail-layout {
     grid-template-columns: 1fr;
+    min-height: 0;
+    height: 100%;
   }
 
   .preview-body {
-    min-height: 520px;
-    height: 70vh;
+    min-height: 0;
+    height: 100%;
   }
 
   .review-floating-window {

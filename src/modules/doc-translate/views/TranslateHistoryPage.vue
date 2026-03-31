@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
-import { RefreshRight, Search } from "@element-plus/icons-vue";
+import { Search } from "@element-plus/icons-vue";
 
 import { useAuthStore } from "../../../stores/auth";
 import {
@@ -18,7 +18,7 @@ const accessToken = computed(() => authStore.accessToken || "");
 
 const keyword = ref("");
 const status = ref("");
-const langPair = ref<LangPairFilterValue>("");
+const langPair = ref<LangPairFilterValue>("en_zh");
 const dateRange = ref<[Date, Date] | null>(null);
 const currentPage = ref(1);
 const pageSize = ref(10);
@@ -130,7 +130,7 @@ onMounted(() => {
       </div>
 
       <div class="toolbar-filters">
-        <el-input v-model="keyword" placeholder="搜索 workflow_id / 文件名" clearable @keyup.enter="loadHistory">
+        <el-input v-model="keyword" placeholder="搜索文件名" clearable @keyup.enter="loadHistory">
           <template #prefix>
             <el-icon><Search /></el-icon>
           </template>
@@ -147,15 +147,15 @@ onMounted(() => {
         <el-select v-model="langPair">
           <el-option v-for="item in langPairOptions" :key="item.value" :label="item.label" :value="item.value" />
         </el-select>
-        <el-select v-model="status">
-          <el-option label="全部状态" value="" />
-          <el-option label="RUNNING" value="RUNNING" />
-          <el-option label="已完成" value="WAIT_REVIEW" />
-          <el-option label="FAILED" value="FAILED" />
-          <el-option label="SUCCEEDED" value="SUCCEEDED" />
-          <el-option label="CANCELLED" value="CANCELLED" />
-        </el-select>
-        <el-button :icon="RefreshRight" :loading="loading" @click="loadHistory">刷新</el-button>
+<!--        <el-select v-model="status">-->
+<!--          <el-option label="全部状态" value="" />-->
+<!--          <el-option label="RUNNING" value="RUNNING" />-->
+<!--          <el-option label="已完成" value="WAIT_REVIEW" />-->
+<!--          <el-option label="FAILED" value="FAILED" />-->
+<!--          <el-option label="SUCCEEDED" value="SUCCEEDED" />-->
+<!--          <el-option label="CANCELLED" value="CANCELLED" />-->
+<!--        </el-select>-->
+        <el-button :icon="Search" :loading="loading" @click="loadHistory">搜索</el-button>
       </div>
     </section>
 
@@ -170,7 +170,13 @@ onMounted(() => {
       </el-empty>
 
       <div v-else class="history-list" v-loading="loading">
-        <article v-for="row in items" :key="row.workflow_id" class="history-card">
+        <button
+          v-for="row in items"
+          :key="row.workflow_id"
+          class="history-card"
+          type="button"
+          @click="openWorkflow(row)"
+        >
           <div class="history-meta">
             <div>
               <p class="meta-file">{{ row.source_filename || row.workflow_id }}</p>
@@ -184,13 +190,7 @@ onMounted(() => {
               {{ formatWorkflowStatusLabel(row.status) }}
             </el-tag>
           </div>
-
-          <p class="workflow-line">Workflow: {{ row.workflow_id }}</p>
-
-          <div class="history-actions">
-            <el-button type="primary" plain @click="openWorkflow(row)">查看任务详情</el-button>
-          </div>
-        </article>
+        </button>
       </div>
     </section>
 
@@ -290,9 +290,26 @@ onMounted(() => {
 
 .history-card {
   border: 1px solid rgba(103, 80, 164, 0.12);
+  outline: none;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  border: 1px solid rgba(103, 80, 164, 0.12);
   border-radius: 18px;
   padding: 18px;
   background: linear-gradient(180deg, #fff 0%, #fcfbff 100%);
+  transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
+}
+
+.history-card:hover {
+  transform: translateY(-1px);
+  border-color: rgba(103, 80, 164, 0.22);
+  box-shadow: 0 12px 28px rgba(69, 52, 132, 0.08);
+}
+
+.history-card:focus-visible {
+  border-color: rgba(95, 69, 198, 0.45);
+  box-shadow: 0 0 0 3px rgba(95, 69, 198, 0.12);
 }
 
 .history-meta {
@@ -309,21 +326,13 @@ onMounted(() => {
   color: var(--text-900);
 }
 
-.meta-sub,
-.workflow-line {
+.meta-sub {
   margin: 8px 0 0;
   color: var(--text-500);
 }
 
 .dot {
   margin: 0 6px;
-}
-
-.history-actions {
-  margin-top: 16px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
 }
 
 .pager-row {
