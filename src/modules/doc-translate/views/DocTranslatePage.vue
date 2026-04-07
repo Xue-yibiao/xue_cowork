@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import axios from "axios";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
@@ -224,6 +225,35 @@ function clearSelectedUpload() {
   uploadRef.value?.clearFiles();
 }
 
+function formatSubmitDocError(error: unknown): string {
+  if (axios.isAxiosError(error)) {
+    const status = error.response?.status;
+    const data = error.response?.data;
+    const detail =
+      typeof data === "string"
+        ? data
+        : String(data?.detail || data?.message || data?.error || "").trim();
+
+    if (error.code === "ECONNABORTED") {
+      return "提交文档翻译失败：请求超时，请稍后重试或缩小文件后重试";
+    }
+
+    if (status || detail) {
+      return `提交文档翻译失败${status ? `（${status}）` : ""}${detail ? `：${detail}` : ""}`;
+    }
+
+    if (error.request) {
+      return "提交文档翻译失败：未收到服务响应，请检查网络、网关或跨域配置";
+    }
+  }
+
+  const message = error instanceof Error ? error.message.trim() : "";
+  if (message) {
+    return `提交文档翻译失败：${message}`;
+  }
+  return "提交文档翻译失败";
+}
+
 async function handleSubmitDocx() {
   const file = selectedDocx.value;
   if (!file) {
@@ -248,7 +278,7 @@ async function handleSubmitDocx() {
     await loadRecentTasks();
   } catch (error) {
     console.error(error);
-    ElMessage.error("提交文档翻译失败");
+    ElMessage.error(formatSubmitDocError(error));
   } finally {
     submittingDoc.value = false;
   }
@@ -401,7 +431,7 @@ onBeforeUnmount(() => {
             </div>
 
             <p class="helper-note">
-              {{ hasActiveWorkflow ? "任务进行中，系统会自动检查状态，完成后恢复上传。" : "文件不能超过 2048MB" }}
+              {{ hasActiveWorkflow ? "任务进行中，系统会自动检查状态，完成后恢复上传。" : "文件不能超过 200MB" }}
             </p>
           </div>
 

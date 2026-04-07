@@ -16,6 +16,7 @@ const workflowId = computed(() => String(route.params.workflowId || "").trim());
 
 <style scoped>
 .review-page {
+  height: calc(100vh - 132px);
   min-height: calc(100vh - 132px);
   border: 1px solid rgba(103, 80, 164, 0.12);
   border-radius: 24px;

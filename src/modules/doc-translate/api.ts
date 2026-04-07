@@ -219,7 +219,28 @@ interface WorkflowDraftResponse {
   items: WorkflowDraftItem[];
 }
 
-type WorkflowArtifactKey = "source_pdf" | "translated_pdf" | "translated_docx";
+interface ReviewIndexItem {
+  block_id: string;
+  block_type?: string | null;
+  source_text?: string | null;
+  translation?: string | null;
+  loc?: Dict | null;
+}
+
+interface ReviewIndexResponse {
+  workflow_id: string;
+  doc_type?: string | null;
+  counts?: Dict | null;
+  items: ReviewIndexItem[];
+}
+
+type WorkflowArtifactKey =
+  | "source_pdf"
+  | "translated_pdf"
+  | "translated_docx"
+  | "source_review_html"
+  | "translated_review_html"
+  | "review_index";
 
 interface WorkflowArtifactBlobResponse {
   blob: Blob;
@@ -231,6 +252,13 @@ interface WorkflowArtifactDataResponse {
   data: Uint8Array;
   contentType: string | null;
 }
+
+interface WorkflowArtifactRequest {
+  url: string;
+  headers?: Record<string, string>;
+}
+
+const WORKFLOW_ARTIFACT_TIMEOUT_MS = 120000;
 
 function authHeaders(accessToken: string | null | undefined): AuthHeaders | undefined {
   const token = String(accessToken || "").trim();
@@ -422,6 +450,7 @@ async function submitContractDocx(
 
   const { data } = await http.post<ContractSubmitResponse>("/api/contract-translate/upload", fd, {
     headers: authHeaders(accessToken),
+    timeout: 180000,
   });
   return data;
 }
@@ -527,6 +556,21 @@ async function getContractWorkflowDetail(
   return data;
 }
 
+function buildContractWorkflowArtifactUrl(workflowId: string, artifactKey: WorkflowArtifactKey): string {
+  return `/api/contract-translate/workflows/${encodeURIComponent(workflowId)}/files/${encodeURIComponent(artifactKey)}`;
+}
+
+function buildContractWorkflowArtifactRequest(
+  accessToken: string | null | undefined,
+  workflowId: string,
+  artifactKey: WorkflowArtifactKey,
+): WorkflowArtifactRequest {
+  return {
+    url: buildContractWorkflowArtifactUrl(workflowId, artifactKey),
+    headers: authHeaders(accessToken) as Record<string, string> | undefined,
+  };
+}
+
 async function queryContractWorkflows(
   accessToken: string | null | undefined,
   params?: {
@@ -553,10 +597,11 @@ async function fetchContractWorkflowArtifactBlob(
   artifactKey: WorkflowArtifactKey,
 ): Promise<WorkflowArtifactBlobResponse> {
   const resp = await http.get<Blob>(
-    `/api/contract-translate/workflows/${encodeURIComponent(workflowId)}/files/${encodeURIComponent(artifactKey)}`,
+    buildContractWorkflowArtifactUrl(workflowId, artifactKey),
     {
       headers: authHeaders(accessToken),
       responseType: "blob",
+      timeout: WORKFLOW_ARTIFACT_TIMEOUT_MS,
     },
   );
 
@@ -573,16 +618,40 @@ async function fetchContractWorkflowArtifactData(
   artifactKey: WorkflowArtifactKey,
 ): Promise<WorkflowArtifactDataResponse> {
   const resp = await http.get<ArrayBuffer>(
-    `/api/contract-translate/workflows/${encodeURIComponent(workflowId)}/files/${encodeURIComponent(artifactKey)}`,
+    buildContractWorkflowArtifactUrl(workflowId, artifactKey),
     {
       headers: authHeaders(accessToken),
       responseType: "arraybuffer",
+      timeout: WORKFLOW_ARTIFACT_TIMEOUT_MS,
     },
   );
 
   return {
     data: new Uint8Array(resp.data),
     contentType: String(resp.headers["content-type"] || "") || null,
+  };
+}
+
+async function fetchContractWorkflowArtifactText(
+  accessToken: string | null | undefined,
+  workflowId: string,
+  artifactKey: WorkflowArtifactKey,
+): Promise<string> {
+  const { blob } = await fetchContractWorkflowArtifactBlob(accessToken, workflowId, artifactKey);
+  return await blob.text();
+}
+
+async function fetchContractWorkflowReviewIndex(
+  accessToken: string | null | undefined,
+  workflowId: string,
+): Promise<ReviewIndexResponse> {
+  const text = await fetchContractWorkflowArtifactText(accessToken, workflowId, "review_index");
+  const raw = JSON.parse(text || "{}") as ReviewIndexResponse;
+  return {
+    workflow_id: String(raw.workflow_id || workflowId),
+    doc_type: String(raw.doc_type || ""),
+    counts: raw.counts || {},
+    items: raw.items || [],
   };
 }
 
@@ -731,14 +800,19 @@ export type {
   TermbaseSetUpdatePayload,
   WorkflowArtifactBlobResponse,
   WorkflowArtifactKey,
+  WorkflowArtifactRequest,
   WorkflowDraftItem,
   WorkflowDraftResponse,
+  ReviewIndexItem,
+  ReviewIndexResponse,
   WorkflowQueryItem,
   WorkflowQueryResponse,
 };
 
 export {
   applyContractWorkflowPatch,
+  buildContractWorkflowArtifactRequest,
+  buildContractWorkflowArtifactUrl,
   createTermbaseEntry,
   createTermbaseSet,
   deleteContractAdminWorkflowById,
@@ -748,6 +822,8 @@ export {
   deleteTermbaseSet,
   fetchContractWorkflowArtifactBlob,
   fetchContractWorkflowArtifactData,
+  fetchContractWorkflowArtifactText,
+  fetchContractWorkflowReviewIndex,
   getContractWorkflowDetail,
   getContractWorkflowDraft,
   getContractWorkflowReviewPayload,

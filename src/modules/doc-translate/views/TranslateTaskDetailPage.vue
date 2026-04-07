@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onUnmounted, ref, shallowRef, watch } from "vue";
+import { computed, nextTick, onUnmounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import { ElMessage } from "element-plus";
 import { Download, EditPen } from "@element-plus/icons-vue";
@@ -8,8 +8,8 @@ import { useAuthStore } from "../../../stores/auth";
 import PdfCanvasViewer from "../components/PdfCanvasViewer.vue";
 import TranslateReviewWorkspace from "../components/TranslateReviewWorkspace.vue";
 import {
+  buildContractWorkflowArtifactRequest,
   fetchContractWorkflowArtifactBlob,
-  fetchContractWorkflowArtifactData,
   getContractWorkflowDetail,
   type WorkflowArtifactKey,
 } from "../api";
@@ -22,11 +22,7 @@ const accessToken = computed(() => authStore.accessToken || "");
 const workflowId = computed(() => String(route.params.workflowId || "").trim());
 
 const workflowDetail = ref<Dict | null>(null);
-const loadingPreview = ref(false);
-const sourcePreviewData = shallowRef<Uint8Array | null>(null);
-const translatedPreviewData = shallowRef<Uint8Array | null>(null);
 const downloadingArtifactKey = ref<WorkflowArtifactKey | "">("");
-const lastLoadedTranslatedStatus = ref("");
 const reviewVisible = ref(false);
 const reviewWindowRef = ref<HTMLElement | null>(null);
 const reviewWindowX = ref(0);
@@ -45,11 +41,6 @@ let resizeStartHeight = 0;
 const REVIEW_MIN_WIDTH = 720;
 const REVIEW_MIN_HEIGHT = 260;
 const REVIEW_EDGE_GAP = 12;
-
-function cleanupPreviews() {
-  sourcePreviewData.value = null;
-  translatedPreviewData.value = null;
-}
 
 function stopPolling() {
   if (pollTimer) {
@@ -78,10 +69,10 @@ function ensureReviewWindowSize() {
   const minWidth = Math.min(REVIEW_MIN_WIDTH, maxWidth);
   const minHeight = Math.min(REVIEW_MIN_HEIGHT, maxHeight);
   if (!reviewWindowWidth.value) {
-    reviewWindowWidth.value = Math.min(1080, maxWidth);
+    reviewWindowWidth.value = maxWidth;
   }
   if (!reviewWindowHeight.value) {
-    reviewWindowHeight.value = Math.min(780, maxHeight);
+    reviewWindowHeight.value = maxHeight;
   }
   reviewWindowWidth.value = Math.min(Math.max(reviewWindowWidth.value, minWidth), maxWidth);
   reviewWindowHeight.value = Math.min(Math.max(reviewWindowHeight.value, minHeight), maxHeight);
@@ -195,18 +186,31 @@ const detailFilename = computed(() =>
   ),
 );
 const canReview = computed(() => Boolean(workflowDetail.value?.review) || detailStatus.value === "WAIT_REVIEW");
-
-async function loadPreviewData(artifactKey: WorkflowArtifactKey): Promise<Uint8Array> {
-  const { data } = await fetchContractWorkflowArtifactData(accessToken.value, workflowId.value, artifactKey);
-  return data;
-}
+const previewRequestHeaders = computed<Record<string, string> | undefined>(() => {
+  const token = accessToken.value.trim();
+  return token ? { Authorization: `Bearer ${token}` } : undefined;
+});
+const sourcePreviewUrl = computed(() => {
+  if (!workflowId.value || !detailArtifacts.value.source_pdf) {
+    return "";
+  }
+  return buildContractWorkflowArtifactRequest(accessToken.value, workflowId.value, "source_pdf").url;
+});
+const translatedPreviewUrl = computed(() => {
+  if (!workflowId.value || !detailArtifacts.value.translated_pdf) {
+    return "";
+  }
+  if (!["WAIT_REVIEW", "SUCCEEDED"].includes(detailStatus.value)) {
+    return "";
+  }
+  return buildContractWorkflowArtifactRequest(accessToken.value, workflowId.value, "translated_pdf").url;
+});
 
 async function loadDetail() {
   if (!workflowId.value) {
     return;
   }
   try {
-    const prevStatus = detailStatus.value;
     const detail = await getContractWorkflowDetail(accessToken.value, workflowId.value);
     workflowDetail.value = detail;
 
@@ -219,48 +223,9 @@ async function loadDetail() {
     } else {
       stopPolling();
     }
-
-    if (prevStatus === "RUNNING" && ["WAIT_REVIEW", "SUCCEEDED", "FAILED", "CANCELLED"].includes(nextStatus)) {
-      lastLoadedTranslatedStatus.value = "";
-    }
   } catch (error) {
     console.error(error);
     ElMessage.error("加载任务详情失败");
-  }
-}
-
-async function loadPreviews() {
-  if (!workflowId.value) {
-    return;
-  }
-
-  loadingPreview.value = true;
-  try {
-    if (!sourcePreviewData.value && detailArtifacts.value.source_pdf) {
-      sourcePreviewData.value = await loadPreviewData("source_pdf");
-    }
-
-    const status = detailStatus.value;
-    const translatedReady = ["WAIT_REVIEW", "SUCCEEDED"].includes(status);
-    const shouldReloadTranslated =
-      translatedReady &&
-      detailArtifacts.value.translated_pdf &&
-      (status !== lastLoadedTranslatedStatus.value || !translatedPreviewData.value);
-
-    if (shouldReloadTranslated) {
-      translatedPreviewData.value = null;
-      translatedPreviewData.value = await loadPreviewData("translated_pdf");
-      lastLoadedTranslatedStatus.value = status;
-    }
-
-    if (status === "RUNNING") {
-      translatedPreviewData.value = null;
-    }
-  } catch (error) {
-    console.error(error);
-    ElMessage.error("加载 PDF 预览失败");
-  } finally {
-    loadingPreview.value = false;
   }
 }
 
@@ -270,11 +235,15 @@ async function downloadArtifact(artifactKey: WorkflowArtifactKey) {
   }
   downloadingArtifactKey.value = artifactKey;
   try {
-    const { blob, filename } = await fetchContractWorkflowArtifactBlob(accessToken.value, workflowId.value, artifactKey);
+    const fallbackFilename = `${workflowId.value}-${artifactKey}.${artifactKey.endsWith("docx") ? "docx" : "pdf"}`;
+    const resp = await fetchContractWorkflowArtifactBlob(accessToken.value, workflowId.value, artifactKey);
+    const blob = resp.blob;
+    const filename = resp.filename;
+
     const url = window.URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = filename || `${workflowId.value}-${artifactKey}.${artifactKey.endsWith("docx") ? "docx" : "pdf"}`;
+    link.download = filename || fallbackFilename;
     document.body.appendChild(link);
     link.click();
     link.remove();
@@ -302,7 +271,6 @@ function closeReview() {
 }
 
 async function handleReviewSubmitted() {
-  lastLoadedTranslatedStatus.value = "";
   await loadDetail();
 }
 
@@ -311,27 +279,15 @@ watch(
   async () => {
     stopPolling();
     closeReview();
-    cleanupPreviews();
-    lastLoadedTranslatedStatus.value = "";
     await loadDetail();
   },
   { immediate: true },
-);
-
-watch(
-  () => detailArtifacts.value,
-  async () => {
-    if (workflowDetail.value) {
-      await loadPreviews();
-    }
-  },
 );
 
 onUnmounted(() => {
   stopPolling();
   stopDragging();
   window.removeEventListener("resize", handleViewportResize);
-  cleanupPreviews();
 });
 
 watch(reviewVisible, (visible) => {
@@ -365,8 +321,8 @@ watch(reviewVisible, (visible) => {
           <strong>原文</strong>
           <el-tag size="small">{{ detailStatus }}</el-tag>
         </div>
-        <div class="preview-body" v-loading="loadingPreview">
-          <PdfCanvasViewer :data="sourcePreviewData" empty-text="原文 PDF 暂不可用" />
+        <div class="preview-body">
+          <PdfCanvasViewer :src="sourcePreviewUrl" :headers="previewRequestHeaders" empty-text="原文 PDF 暂不可用" />
         </div>
       </article>
 
@@ -393,8 +349,8 @@ watch(reviewVisible, (visible) => {
             </el-button>
           </div>
         </div>
-        <div class="preview-body translated" v-loading="loadingPreview">
-          <PdfCanvasViewer :data="translatedPreviewData" empty-text="译文 PDF 暂不可用" />
+        <div class="preview-body translated">
+          <PdfCanvasViewer :src="translatedPreviewUrl" :headers="previewRequestHeaders" empty-text="译文 PDF 暂不可用" />
         </div>
       </article>
     </section>

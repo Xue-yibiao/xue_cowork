@@ -1,19 +1,20 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
-import { Close, Search } from "@element-plus/icons-vue";
+import { CircleCheckFilled, Close, Search, WarningFilled } from "@element-plus/icons-vue";
 
 import { useAuthStore } from "../../../stores/auth";
 import {
   applyContractWorkflowPatch,
+  fetchContractWorkflowArtifactText,
+  fetchContractWorkflowReviewIndex,
   getContractWorkflowDetail,
-  getContractWorkflowDraft,
-  getContractWorkflowReviewPayload,
-  type WorkflowDraftItem,
+  type ReviewIndexItem,
 } from "../api";
 
 type Dict = Record<string, unknown>;
 type ReviewTab = "translations" | "patched";
+type BlockElementsIndex = Map<string, HTMLElement[]>;
 
 const props = withDefaults(
   defineProps<{
@@ -39,66 +40,76 @@ const activeTab = ref<ReviewTab>("translations");
 const loading = ref(false);
 const submitting = ref(false);
 const workflowDetail = ref<Dict | null>(null);
-const reviewPayload = ref<Dict | null>(null);
-const draftItems = ref<WorkflowDraftItem[]>([]);
+const reviewItems = ref<ReviewIndexItem[]>([]);
+const sourceHtml = ref("");
+const translatedHtml = ref("");
 const searchKeyword = ref("");
 const pendingPatches = ref<Record<string, string>>({});
-const editingBlockId = ref("");
+const activeBlockId = ref("");
 const editingText = ref("");
-const fontScale = ref(1);
+const reviewDataReady = ref(false);
+
+const sourcePaneRef = ref<HTMLDivElement | null>(null);
+const translatedPaneRef = ref<HTMLDivElement | null>(null);
+const sourceViewportRef = ref<HTMLDivElement | null>(null);
+const translatedViewportRef = ref<HTMLDivElement | null>(null);
+const translatedShellRef = ref<HTMLDivElement | null>(null);
+const floatingEditorRef = ref<HTMLTextAreaElement | null>(null);
+const masterScrollbarRef = ref<HTMLDivElement | null>(null);
+const masterScrollbarSpacerRef = ref<HTMLDivElement | null>(null);
+const overlayStyle = ref<Record<string, string> | null>(null);
 
 let pollTimer: ReturnType<typeof setInterval> | null = null;
+let resizeObserver: ResizeObserver | null = null;
+let masterMetricsFrame: number | null = null;
+let syncingMasterScroll = false;
+let lastMasterScrollbarTop = 0;
+let sourceBlockElements: BlockElementsIndex = new Map();
+let translatedBlockElements: BlockElementsIndex = new Map();
+let dirtyMarkedBlockIds = new Set<string>();
+let lastMarkedActiveBlockId = "";
+let loadReviewToken = 0;
+let postMountSetupFrame: number | null = null;
 
 const workflowStatus = computed(() => String(workflowDetail.value?.status || "-"));
 const isEditable = computed(() => workflowStatus.value === "WAIT_REVIEW");
 const dirtyCount = computed(() => Object.keys(pendingPatches.value).length);
-
-const qaSuggestionsByBlockId = computed(() => {
-  const map = new Map<string, Dict[]>();
-  const failures = reviewPayload.value?.failures;
-  if (!Array.isArray(failures)) {
-    return map;
+const reviewReadyNotice = computed(() => {
+  if (!isEditable.value) {
+    return null;
   }
-  for (const failure of failures) {
-    if (!failure || typeof failure !== "object") {
-      continue;
-    }
-    const blockId = String((failure as Dict).block_id || "").trim();
+  if (!reviewDataReady.value) {
+    return {
+      text: "人工修订数据仍在初始化，请稍候再编辑",
+      tone: "warning" as const,
+      icon: WarningFilled,
+    };
+  }
+  return {
+    text: "人工修订数据已准备就绪，可以开始编辑",
+    tone: "success" as const,
+    icon: CircleCheckFilled,
+  };
+});
+const reviewItemById = computed(() => {
+  const next = new Map<string, ReviewIndexItem>();
+  for (const item of reviewItems.value) {
+    const blockId = String(item.block_id || "").trim();
     if (!blockId) {
       continue;
     }
-    const bucket = map.get(blockId) || [];
-    bucket.push(failure as Dict);
-    map.set(blockId, bucket);
+    next.set(blockId, item);
   }
-  return map;
+  return next;
 });
-
-const qaHitSet = computed(() => new Set(Array.from(qaSuggestionsByBlockId.value.keys())));
-
-const mergedDraftItems = computed(() =>
-  draftItems.value.map((item) => ({
-    ...item,
-    mergedTranslation: pendingPatches.value[item.block_id] ?? item.translation ?? "",
-  })),
+const patchedItems = computed(() =>
+  reviewItems.value
+    .filter((item) => Object.prototype.hasOwnProperty.call(pendingPatches.value, item.block_id))
+    .map((item) => ({
+      ...item,
+      mergedTranslation: pendingPatches.value[item.block_id],
+    })),
 );
-
-const revisedItems = computed(() =>
-  mergedDraftItems.value.filter((item) => Object.prototype.hasOwnProperty.call(pendingPatches.value, item.block_id)),
-);
-
-const filteredDraftItems = computed(() => {
-  const needle = searchKeyword.value.trim().toLowerCase();
-  if (!needle) {
-    return mergedDraftItems.value;
-  }
-  return mergedDraftItems.value.filter((item) => {
-    const haystack = `${item.block_id} ${item.source_text || ""} ${item.translation || ""} ${item.mergedTranslation || ""}`.toLowerCase();
-    return haystack.includes(needle);
-  });
-});
-
-const typographyStyle = computed(() => ({ "--review-font-scale": String(fontScale.value) }));
 
 function stopPolling() {
   if (pollTimer) {
@@ -107,97 +118,411 @@ function stopPolling() {
   }
 }
 
-function translationForBlock(blockId: string): string {
-  const item = draftItems.value.find((row) => row.block_id === blockId);
+function safeSelector(blockId: string) {
+  return `[data-block-id="${blockId.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"]`;
+}
+
+function normalizeReviewHtml(raw: string) {
+  const text = String(raw || "").trim();
+  if (!text) {
+    return "";
+  }
+  const styleMatches = Array.from(text.matchAll(/<style\b[^>]*>[\s\S]*?<\/style>/gi)).map((match) => match[0]);
+  const bodyMatch = text.match(/<body\b[^>]*>([\s\S]*?)<\/body>/i);
+  const body = bodyMatch?.[1] || text;
+  return `${styleMatches.join("\n")}${body}`;
+}
+
+function translationForBlock(blockId: string) {
+  const item = reviewItemById.value.get(blockId);
   return String(item?.translation || "");
 }
 
-function isDirty(blockId: string): boolean {
-  return Object.prototype.hasOwnProperty.call(pendingPatches.value, blockId);
+function resetBlockElementIndexes() {
+  sourceBlockElements = new Map();
+  translatedBlockElements = new Map();
+  dirtyMarkedBlockIds = new Set();
+  lastMarkedActiveBlockId = "";
 }
 
-function hasPendingEditChanges(): boolean {
-  if (!editingBlockId.value) {
-    return false;
+function buildBlockElementsIndex(host: HTMLElement | null): BlockElementsIndex {
+  const next: BlockElementsIndex = new Map();
+  if (!host) {
+    return next;
   }
-  const currentMerged = pendingPatches.value[editingBlockId.value] ?? translationForBlock(editingBlockId.value);
-  return editingText.value !== currentMerged;
+
+  host.querySelectorAll("[data-block-id]").forEach((node) => {
+    const el = node as HTMLElement;
+    const blockId = String(el.dataset.blockId || "").trim();
+    if (!blockId) {
+      return;
+    }
+    const bucket = next.get(blockId);
+    if (bucket) {
+      bucket.push(el);
+      return;
+    }
+    next.set(blockId, [el]);
+  });
+
+  return next;
 }
 
-function applyEditingToDirtyMap(options?: { clearAfter?: boolean; silent?: boolean }) {
-  const blockId = editingBlockId.value;
+function rebuildBlockElementIndexes() {
+  sourceBlockElements = buildBlockElementsIndex(sourcePaneRef.value);
+  translatedBlockElements = buildBlockElementsIndex(translatedPaneRef.value);
+  dirtyMarkedBlockIds = new Set();
+  lastMarkedActiveBlockId = "";
+}
+
+function queryBlockElements(host: HTMLElement | null, blockId: string) {
+  if (!host || !blockId) {
+    return [];
+  }
+  if (host === sourcePaneRef.value && sourceBlockElements.size) {
+    return sourceBlockElements.get(blockId) || [];
+  }
+  if (host === translatedPaneRef.value && translatedBlockElements.size) {
+    return translatedBlockElements.get(blockId) || [];
+  }
+  return Array.from(host.querySelectorAll(safeSelector(blockId))) as HTMLElement[];
+}
+
+function toggleBlockClass(elements: HTMLElement[], className: string, enabled: boolean) {
+  for (const el of elements) {
+    el.classList.toggle(className, enabled);
+  }
+}
+
+function scrollBlockWithinViewport(viewport: HTMLElement | null, target: HTMLElement | undefined) {
+  if (!viewport || !target) {
+    return;
+  }
+  const viewportRect = viewport.getBoundingClientRect();
+  const targetRect = target.getBoundingClientRect();
+  const desiredTop = viewport.scrollTop + (targetRect.top - viewportRect.top) - Math.max((viewport.clientHeight - targetRect.height) / 2, 64);
+  viewport.scrollTo({
+    top: Math.max(0, desiredTop),
+    behavior: "smooth",
+  });
+}
+
+function getViewportMaxScrollTop(viewport: HTMLElement | null) {
+  if (!viewport) {
+    return 0;
+  }
+  return Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+}
+
+function applyMasterScrollbarDelta(delta: number) {
+  if (!delta) {
+    return;
+  }
+  syncingMasterScroll = true;
+  if (sourceViewportRef.value) {
+    sourceViewportRef.value.scrollTop += delta;
+  }
+  if (translatedViewportRef.value) {
+    translatedViewportRef.value.scrollTop += delta;
+  }
+  syncingMasterScroll = false;
+
+  refreshOverlayLayout();
+}
+
+function syncMasterScrollbarMetrics() {
+  masterMetricsFrame = null;
+  const masterScrollbar = masterScrollbarRef.value;
+  const spacer = masterScrollbarSpacerRef.value;
+  if (!masterScrollbar || !spacer || activeTab.value !== "translations") {
+    return;
+  }
+
+  const sourceViewport = sourceViewportRef.value;
+  const translatedViewport = translatedViewportRef.value;
+  const viewportHeight = Math.max(sourceViewport?.clientHeight || 0, translatedViewport?.clientHeight || 0, masterScrollbar.clientHeight || 0);
+  const maxScrollTop = Math.max(getViewportMaxScrollTop(sourceViewport), getViewportMaxScrollTop(translatedViewport));
+  spacer.style.height = `${Math.max(viewportHeight + maxScrollTop, viewportHeight, 1)}px`;
+  const masterMaxScrollTop = getViewportMaxScrollTop(masterScrollbar);
+  if (masterScrollbar.scrollTop > masterMaxScrollTop) {
+    syncingMasterScroll = true;
+    masterScrollbar.scrollTop = masterMaxScrollTop;
+    syncingMasterScroll = false;
+  }
+  lastMasterScrollbarTop = masterScrollbar.scrollTop;
+}
+
+function scheduleMasterScrollbarMetricsSync() {
+  if (masterMetricsFrame !== null) {
+    cancelAnimationFrame(masterMetricsFrame);
+  }
+  masterMetricsFrame = window.requestAnimationFrame(() => {
+    syncMasterScrollbarMetrics();
+  });
+}
+
+function queuePostMountSetup(options?: { syncDom?: boolean }) {
+  if (postMountSetupFrame !== null) {
+    cancelAnimationFrame(postMountSetupFrame);
+  }
+  postMountSetupFrame = window.requestAnimationFrame(() => {
+    postMountSetupFrame = null;
+    rebuildBlockElementIndexes();
+    if (options?.syncDom) {
+      syncDomState();
+    }
+    scheduleMasterScrollbarMetricsSync();
+  });
+}
+
+function syncTranslatedBlockText(blockId: string, text: string) {
+  const elements = queryBlockElements(translatedPaneRef.value, blockId);
+  for (const el of elements) {
+    if (el.textContent !== text) {
+      el.textContent = text;
+    }
+  }
+}
+
+function restoreTranslatedDomText(blockIds?: Iterable<string>) {
+  const ids = blockIds ? Array.from(blockIds) : Object.keys(pendingPatches.value);
+  for (const blockId of ids) {
+    const item = reviewItemById.value.get(blockId);
+    const nextText = pendingPatches.value[blockId] ?? String(item?.translation || "");
+    syncTranslatedBlockText(blockId, nextText);
+  }
+}
+
+function refreshOverlayLayout() {
+  const blockId = activeBlockId.value;
+  if (!blockId || !translatedShellRef.value || !translatedViewportRef.value || !translatedPaneRef.value) {
+    overlayStyle.value = null;
+    return;
+  }
+
+  const target = queryBlockElements(translatedPaneRef.value, blockId)[0];
+  if (!target) {
+    overlayStyle.value = null;
+    return;
+  }
+
+  const shellRect = translatedShellRef.value.getBoundingClientRect();
+  const targetRect = target.getBoundingClientRect();
+  const top = targetRect.top - shellRect.top;
+  const left = targetRect.left - shellRect.left;
+  const availableWidth = Math.max(200, translatedShellRef.value.clientWidth - left - 20);
+  const width = Math.min(Math.max(targetRect.width + 8, 220), availableWidth);
+  const minHeight = Math.max(targetRect.height + 8, 84);
+
+  overlayStyle.value = {
+    top: `${top}px`,
+    left: `${left}px`,
+    width: `${width}px`,
+    minHeight: `${minHeight}px`,
+  };
+}
+
+function syncDirtyMarks() {
+  const nextDirtyBlockIds = new Set(Object.keys(pendingPatches.value));
+
+  for (const blockId of dirtyMarkedBlockIds) {
+    if (nextDirtyBlockIds.has(blockId)) {
+      continue;
+    }
+    toggleBlockClass(queryBlockElements(sourcePaneRef.value, blockId), "is-review-dirty", false);
+    toggleBlockClass(queryBlockElements(translatedPaneRef.value, blockId), "is-review-dirty", false);
+  }
+
+  for (const blockId of nextDirtyBlockIds) {
+    if (dirtyMarkedBlockIds.has(blockId)) {
+      continue;
+    }
+    toggleBlockClass(queryBlockElements(sourcePaneRef.value, blockId), "is-review-dirty", true);
+    toggleBlockClass(queryBlockElements(translatedPaneRef.value, blockId), "is-review-dirty", true);
+  }
+
+  dirtyMarkedBlockIds = nextDirtyBlockIds;
+}
+
+function syncActiveMarks() {
+  const nextActiveBlockId = String(activeBlockId.value || "").trim();
+  if (lastMarkedActiveBlockId && lastMarkedActiveBlockId !== nextActiveBlockId) {
+    toggleBlockClass(queryBlockElements(sourcePaneRef.value, lastMarkedActiveBlockId), "is-review-active", false);
+    toggleBlockClass(queryBlockElements(translatedPaneRef.value, lastMarkedActiveBlockId), "is-review-active", false);
+  }
+
+  if (nextActiveBlockId && lastMarkedActiveBlockId !== nextActiveBlockId) {
+    toggleBlockClass(queryBlockElements(sourcePaneRef.value, nextActiveBlockId), "is-review-active", true);
+    toggleBlockClass(queryBlockElements(translatedPaneRef.value, nextActiveBlockId), "is-review-active", true);
+  }
+
+  lastMarkedActiveBlockId = nextActiveBlockId;
+}
+
+function syncDomState(options?: { scroll?: boolean; focus?: boolean }) {
+  syncDirtyMarks();
+  syncActiveMarks();
+
+  if (activeBlockId.value) {
+    const sourceEls = queryBlockElements(sourcePaneRef.value, activeBlockId.value);
+    const translatedEls = queryBlockElements(translatedPaneRef.value, activeBlockId.value);
+
+    if (options?.scroll) {
+      scrollBlockWithinViewport(sourceViewportRef.value, sourceEls[0]);
+      scrollBlockWithinViewport(translatedViewportRef.value, translatedEls[0]);
+    }
+  }
+
+  refreshOverlayLayout();
+
+  if (options?.focus && floatingEditorRef.value) {
+    floatingEditorRef.value.focus({ preventScroll: true });
+    floatingEditorRef.value.selectionStart = floatingEditorRef.value.value.length;
+    floatingEditorRef.value.selectionEnd = floatingEditorRef.value.value.length;
+  }
+}
+
+function activateBlock(blockId: string, options?: { scroll?: boolean; focus?: boolean }) {
+  if (!blockId) {
+    return;
+  }
+  if (!reviewDataReady.value) {
+    ElMessage.warning("人工修订数据仍在初始化，请稍候再编辑");
+    return;
+  }
+  if (!isEditable.value) {
+    ElMessage.warning("当前任务不在可修订状态");
+    return;
+  }
+
+  activeBlockId.value = blockId;
+  editingText.value = pendingPatches.value[blockId] ?? translationForBlock(blockId);
+
+  nextTick(() => {
+    syncDomState({
+      scroll: options?.scroll ?? true,
+      focus: options?.focus ?? true,
+    });
+  });
+}
+
+function updateEditingValue(value: string) {
+  const blockId = activeBlockId.value;
   if (!blockId) {
     return;
   }
 
+  editingText.value = value;
   const baseTranslation = translationForBlock(blockId);
-  if (editingText.value === baseTranslation) {
+  if (value === baseTranslation) {
     const next = { ...pendingPatches.value };
     delete next[blockId];
     pendingPatches.value = next;
   } else {
     pendingPatches.value = {
       ...pendingPatches.value,
-      [blockId]: editingText.value,
+      [blockId]: value,
     };
   }
 
-  if (options?.clearAfter) {
-    editingBlockId.value = "";
-    editingText.value = "";
-  }
-
-  if (!options?.silent) {
-    ElMessage.success("已保存当前修订");
-  }
-}
-
-function beginEditing(blockId: string) {
-  if (!isEditable.value) {
-    ElMessage.warning("当前任务不在可修订状态");
-    return;
-  }
-
-  if (editingBlockId.value && editingBlockId.value !== blockId && hasPendingEditChanges()) {
-    applyEditingToDirtyMap({ silent: true });
-  }
-
-  editingBlockId.value = blockId;
-  editingText.value = pendingPatches.value[blockId] ?? translationForBlock(blockId);
+  syncTranslatedBlockText(blockId, value);
   nextTick(() => {
-    const textarea = document.querySelector<HTMLTextAreaElement>(".translation-card.is-editing textarea");
-    textarea?.focus();
+    syncDomState();
+    scheduleMasterScrollbarMetricsSync();
   });
 }
 
-function cancelEditing() {
-  if (!editingBlockId.value) {
-    return;
-  }
-  editingBlockId.value = "";
-  editingText.value = "";
+function closeOverlay() {
+  activeBlockId.value = "";
+  overlayStyle.value = null;
 }
 
-function confirmEditing() {
-  if (!editingBlockId.value) {
-    return;
-  }
-  applyEditingToDirtyMap({ clearAfter: true });
+function onEditorBlur(closedBlockId: string) {
+  window.setTimeout(() => {
+    if (!closedBlockId || activeBlockId.value !== closedBlockId) {
+      return;
+    }
+    const activeEl = document.activeElement as HTMLElement | null;
+    if (activeEl && floatingEditorRef.value && (activeEl === floatingEditorRef.value || floatingEditorRef.value.contains(activeEl))) {
+      return;
+    }
+    closeOverlay();
+    nextTick(() => syncDomState());
+  }, 0);
 }
 
 function clearAllRevisions() {
+  const dirtyBlockIds = Object.keys(pendingPatches.value);
   pendingPatches.value = {};
-  if (editingBlockId.value) {
-    editingText.value = translationForBlock(editingBlockId.value);
+  if (activeBlockId.value) {
+    editingText.value = translationForBlock(activeBlockId.value);
   }
+  nextTick(() => {
+    restoreTranslatedDomText(dirtyBlockIds);
+    syncDomState();
+    scheduleMasterScrollbarMetricsSync();
+  });
   ElMessage.success("已清除所有本地修订");
 }
 
 function closePanel() {
-  if (editingBlockId.value && hasPendingEditChanges()) {
-    applyEditingToDirtyMap({ silent: true });
-  }
   emit("close");
+}
+
+function onTranslatedPaneClick(event: MouseEvent) {
+  const target = event.target as HTMLElement | null;
+  const blockEl = target?.closest("[data-block-id]") as HTMLElement | null;
+  if (!blockEl) {
+    return;
+  }
+  const blockId = String(blockEl.dataset.blockId || "").trim();
+  if (!blockId) {
+    return;
+  }
+  activateBlock(blockId, { scroll: true, focus: true });
+}
+
+function jumpToBlock(blockId: string) {
+  activeTab.value = "translations";
+  nextTick(() => activateBlock(blockId, { scroll: true, focus: true }));
+}
+
+function handleDocumentPointerDown(event: PointerEvent) {
+  if (!activeBlockId.value) {
+    return;
+  }
+  const target = event.target as HTMLElement | null;
+  if (!target) {
+    return;
+  }
+  if (floatingEditorRef.value && (target === floatingEditorRef.value || floatingEditorRef.value.contains(target))) {
+    return;
+  }
+  if (target.closest("[data-block-id]")) {
+    return;
+  }
+  closeOverlay();
+  nextTick(() => syncDomState());
+}
+
+function handleTranslatedViewportScroll() {
+  if (activeTab.value !== "translations") {
+    return;
+  }
+  refreshOverlayLayout();
+}
+
+function handleMasterScrollbarScroll() {
+  if (syncingMasterScroll || activeTab.value !== "translations") {
+    return;
+  }
+  const masterScrollbar = masterScrollbarRef.value;
+  if (!masterScrollbar) {
+    return;
+  }
+  const delta = masterScrollbar.scrollTop - lastMasterScrollbarTop;
+  lastMasterScrollbarTop = masterScrollbar.scrollTop;
+  applyMasterScrollbarDelta(delta);
 }
 
 async function loadReviewData() {
@@ -205,9 +530,14 @@ async function loadReviewData() {
     return;
   }
 
+  const token = ++loadReviewToken;
+  reviewDataReady.value = false;
   loading.value = true;
   try {
     const detail = await getContractWorkflowDetail(accessToken.value, normalizedWorkflowId.value);
+    if (token !== loadReviewToken) {
+      return;
+    }
     workflowDetail.value = detail;
     if (String(detail.status || "") === "RUNNING") {
       startPolling();
@@ -215,23 +545,42 @@ async function loadReviewData() {
       stopPolling();
     }
 
-    const [draft, payload] = await Promise.all([
-      getContractWorkflowDraft(accessToken.value, normalizedWorkflowId.value, {
-        offset: 0,
-        limit: 1000,
-      }),
-      (detail.status === "WAIT_REVIEW" || detail.review
-        ? getContractWorkflowReviewPayload(accessToken.value, normalizedWorkflowId.value).catch(() => null)
-        : Promise.resolve(null)) as Promise<Dict | null>,
+    const [sourceHtmlText, translatedHtmlText] = await Promise.all([
+      fetchContractWorkflowArtifactText(accessToken.value, normalizedWorkflowId.value, "source_review_html"),
+      fetchContractWorkflowArtifactText(accessToken.value, normalizedWorkflowId.value, "translated_review_html"),
     ]);
+    if (token !== loadReviewToken) {
+      return;
+    }
 
-    draftItems.value = draft.items || [];
-    reviewPayload.value = payload;
+    sourceHtml.value = normalizeReviewHtml(sourceHtmlText);
+    translatedHtml.value = normalizeReviewHtml(translatedHtmlText);
+
+    await nextTick();
+    if (token !== loadReviewToken) {
+      return;
+    }
+    loading.value = false;
+    queuePostMountSetup();
+
+    const reviewIndex = await fetchContractWorkflowReviewIndex(accessToken.value, normalizedWorkflowId.value);
+    if (token !== loadReviewToken) {
+      return;
+    }
+    reviewItems.value = reviewIndex.items || [];
+    reviewDataReady.value = true;
+    await nextTick();
+    if (token !== loadReviewToken) {
+      return;
+    }
+    queuePostMountSetup({ syncDom: true });
   } catch (error) {
     console.error(error);
-    ElMessage.error("加载人工校验数据失败");
+    ElMessage.error("加载人工修订 HTML 视图失败");
   } finally {
-    loading.value = false;
+    if (token === loadReviewToken) {
+      loading.value = false;
+    }
   }
 }
 
@@ -261,17 +610,13 @@ function startPolling() {
 }
 
 async function submitReview() {
-  if (editingBlockId.value && hasPendingEditChanges()) {
-    applyEditingToDirtyMap({ silent: true, clearAfter: true });
-  }
-
   const patches = Object.entries(pendingPatches.value).map(([block_id, translation]) => ({
     block_id,
     translation,
   }));
 
   if (!patches.length) {
-    ElMessage.warning("请先至少修改一条译文再重新生成");
+    ElMessage.warning("请先至少修改一条译文再统一应用");
     return;
   }
 
@@ -280,9 +625,11 @@ async function submitReview() {
     await applyContractWorkflowPatch(accessToken.value, normalizedWorkflowId.value, {
       patches,
       resolved_by: "manual",
-      comment: "floating review submit",
+      comment: "review html pane submit",
     });
     pendingPatches.value = {};
+    activeBlockId.value = "";
+    editingText.value = "";
     activeTab.value = "translations";
     emit("submitted");
     ElMessage.success("修订已提交，正在重新生成译文");
@@ -300,11 +647,22 @@ function handleHeaderMouseDown(event: MouseEvent) {
     return;
   }
   const target = event.target as HTMLElement | null;
-  if (target?.closest("button, input, textarea, .el-input, .el-textarea, .pagination-shell, .translation-toolbar")) {
+  if (target?.closest("button, input, textarea, .el-input, .el-textarea")) {
     return;
   }
   emit("dragStart", event);
 }
+
+const filteredPatchedItems = computed(() => {
+  const needle = searchKeyword.value.trim().toLowerCase();
+  if (!needle) {
+    return patchedItems.value;
+  }
+  return patchedItems.value.filter((item) => {
+    const haystack = `${item.block_id} ${item.source_text || ""} ${item.mergedTranslation || ""}`.toLowerCase();
+    return haystack.includes(needle);
+  });
+});
 
 watch(
   () => normalizedWorkflowId.value,
@@ -312,38 +670,84 @@ watch(
     stopPolling();
     activeTab.value = "translations";
     searchKeyword.value = "";
-    editingBlockId.value = "";
+    activeBlockId.value = "";
     editingText.value = "";
     pendingPatches.value = {};
+    reviewItems.value = [];
+    sourceHtml.value = "";
+    translatedHtml.value = "";
+    reviewDataReady.value = false;
+    resetBlockElementIndexes();
     await loadReviewData();
   },
   { immediate: true },
 );
 
-watch(searchKeyword, () => {
-  if (editingBlockId.value && hasPendingEditChanges()) {
-    applyEditingToDirtyMap({ silent: true });
+watch(searchKeyword, async (keyword) => {
+  const needle = keyword.trim().toLowerCase();
+  if (!needle || activeTab.value !== "translations" || !reviewDataReady.value) {
+    return;
+  }
+  const firstHit = reviewItems.value.find((item) => {
+    const haystack = `${item.block_id} ${item.source_text || ""} ${pendingPatches.value[item.block_id] ?? item.translation ?? ""}`.toLowerCase();
+    return haystack.includes(needle);
+  });
+  if (firstHit) {
+    activateBlock(firstHit.block_id, { scroll: true, focus: false });
   }
 });
 
 watch(activeTab, () => {
-  if (editingBlockId.value && hasPendingEditChanges()) {
-    applyEditingToDirtyMap({ silent: true });
-  }
-  if (activeTab.value !== "translations") {
-    editingBlockId.value = "";
-    editingText.value = "";
-  }
+  nextTick(() => {
+    if (activeTab.value === "translations") {
+      rebuildBlockElementIndexes();
+    } else {
+      resetBlockElementIndexes();
+    }
+    syncDomState();
+    scheduleMasterScrollbarMetricsSync();
+  });
 });
+
+function handleWindowResize() {
+  refreshOverlayLayout();
+  scheduleMasterScrollbarMetricsSync();
+}
 
 onMounted(() => {
   if (workflowStatus.value === "RUNNING") {
     startPolling();
   }
+  window.addEventListener("resize", handleWindowResize);
+  document.addEventListener("pointerdown", handleDocumentPointerDown, true);
+
+  if (typeof ResizeObserver !== "undefined") {
+    resizeObserver = new ResizeObserver(() => {
+      scheduleMasterScrollbarMetricsSync();
+      refreshOverlayLayout();
+    });
+    [sourceViewportRef.value, translatedViewportRef.value, sourcePaneRef.value, translatedPaneRef.value].forEach((element) => {
+      if (element) {
+        resizeObserver?.observe(element);
+      }
+    });
+  }
 });
 
 onBeforeUnmount(() => {
   stopPolling();
+  window.removeEventListener("resize", handleWindowResize);
+  document.removeEventListener("pointerdown", handleDocumentPointerDown, true);
+  resizeObserver?.disconnect();
+  resizeObserver = null;
+  if (postMountSetupFrame !== null) {
+    cancelAnimationFrame(postMountSetupFrame);
+    postMountSetupFrame = null;
+  }
+  if (masterMetricsFrame !== null) {
+    cancelAnimationFrame(masterMetricsFrame);
+    masterMetricsFrame = null;
+  }
 });
 </script>
 
@@ -351,24 +755,34 @@ onBeforeUnmount(() => {
   <div
     class="review-workspace"
     :class="{ 'is-floating': floating, 'is-readonly': !isEditable }"
-    :style="typographyStyle"
     v-loading="loading"
   >
     <div class="workspace-topbar" @mousedown="handleHeaderMouseDown">
       <div class="topbar-main">
         <div class="workspace-tabs">
           <button :class="['workspace-tab', { 'is-active': activeTab === 'translations' }]" type="button" @click="activeTab = 'translations'">
-            译文
+            修订
           </button>
           <button :class="['workspace-tab', { 'is-active': activeTab === 'patched' }]" type="button" @click="activeTab = 'patched'">
-            已修订
+            已修改
             <span v-if="dirtyCount" class="tab-count">{{ dirtyCount }}</span>
           </button>
         </div>
 
-        <div class="search-shell topbar-search">
-          <el-icon><Search /></el-icon>
-          <input v-model="searchKeyword" type="text" placeholder="输入关键字搜索" />
+        <div
+          v-if="reviewReadyNotice"
+          :class="['topbar-notice', `is-${reviewReadyNotice.tone}`]"
+        >
+          <el-icon><component :is="reviewReadyNotice.icon" /></el-icon>
+          <span>{{ reviewReadyNotice.text }}</span>
+        </div>
+
+        <div class="topbar-actions">
+          <div class="search-shell topbar-search">
+            <el-icon><Search /></el-icon>
+            <input v-model="searchKeyword" type="text" placeholder="搜索原文、译文或 block_id" />
+          </div>
+          <div class="status-chip">{{ workflowStatus }}</div>
         </div>
       </div>
 
@@ -382,102 +796,88 @@ onBeforeUnmount(() => {
         当前状态为 {{ workflowStatus }}，修订区暂时只读。系统重新生成完成后会自动刷新。
       </div>
 
-      <template v-if="activeTab === 'translations'">
-        <div class="translation-flow">
-          <article
-            v-for="item in filteredDraftItems"
-            :key="item.block_id"
-            class="translation-card"
-            :class="{
-              'is-editing': item.block_id === editingBlockId,
-              'is-dirty': isDirty(item.block_id),
-            }"
-          >
-            <div class="card-title">
-              <div class="card-badges">
-                <span v-if="qaHitSet.has(item.block_id)" class="badge badge-warning">QA</span>
-                <span v-if="item.manual_patch_id" class="badge badge-applied">已应用</span>
-                <span v-if="isDirty(item.block_id)" class="badge badge-dirty">已修订</span>
-              </div>
-            </div>
+      <div v-else class="status-banner is-soft">
+        请在右侧译文上点击进行编辑，修改完成后统一应用修改。
+      </div>
 
-            <div class="translation-pair">
-              <section class="pair-pane pair-pane--source">
-                <header class="pair-label">原文</header>
-                <p class="card-source">{{ item.source_text || "-" }}</p>
+      <div class="review-main">
+        <div class="review-main__content">
+          <div class="review-headline">
+            <div class="headline-left">
+              <span class="headline-subtitle" v-if="activeBlockId">当前块：{{ activeBlockId }}</span>
+            </div>
+            <div class="headline-right">
+              <button v-if="activeTab === 'patched'" type="button" class="ghost-action" :disabled="!dirtyCount" @click="clearAllRevisions">
+                清除所有修改
+              </button>
+              <button type="button" class="primary-action" :disabled="!dirtyCount || !isEditable" @click="submitReview">
+                {{ submitting ? "应用中..." : "确认并应用修改" }}
+              </button>
+            </div>
+          </div>
+
+          <template v-if="activeTab === 'translations'">
+            <div class="pane-grid">
+              <section class="doc-card">
+                <header class="doc-card__header">原文</header>
+                <div ref="sourceViewportRef" class="doc-card__viewport">
+                  <div ref="sourcePaneRef" class="review-html-host" v-html="sourceHtml" />
+                </div>
               </section>
 
-              <section class="pair-pane pair-pane--translation">
-                <header class="pair-label">译文</header>
-                <div v-if="item.block_id !== editingBlockId" class="card-translation-shell">
-                  <button
-                    :class="['card-translation', { 'is-highlighted': isDirty(item.block_id) || Boolean(item.manual_patch_id) }]"
-                    type="button"
-                    :disabled="!isEditable"
-                    @click="beginEditing(item.block_id)"
-                  >
-                    {{ item.mergedTranslation || "暂无译文" }}
-                  </button>
-                </div>
+              <section class="doc-card">
+                <header class="doc-card__header">译文</header>
+                <div ref="translatedViewportRef" class="doc-card__viewport" @scroll="handleTranslatedViewportScroll">
+                  <div ref="translatedShellRef" class="review-html-shell">
+                    <div
+                      ref="translatedPaneRef"
+                      class="review-html-host review-html-host--editable"
+                      v-html="translatedHtml"
+                      @click="onTranslatedPaneClick"
+                    />
 
-                <div v-else class="card-editor">
-                  <textarea v-model="editingText" rows="5" />
-                  <div class="editor-actions">
-                    <div class="editor-actions-right editor-actions-right--compact">
-                      <button type="button" class="ghost-action" @click="cancelEditing">取消</button>
-                      <button type="button" class="primary-action" @click="confirmEditing">确定</button>
+                    <div v-if="overlayStyle && activeBlockId && isEditable" class="floating-editor" :style="overlayStyle">
+                      <textarea
+                        ref="floatingEditorRef"
+                        class="floating-editor__textarea"
+                        :value="editingText"
+                        @input="updateEditingValue(($event.target as HTMLTextAreaElement).value)"
+                        @blur="onEditorBlur(activeBlockId)"
+                      />
                     </div>
                   </div>
                 </div>
               </section>
             </div>
-          </article>
+          </template>
 
-          <el-empty v-if="!filteredDraftItems.length" description="没有匹配到可展示的译文块" />
-        </div>
-      </template>
-
-      <template v-else-if="activeTab === 'patched'">
-        <div class="patched-head">
-          <p>共 {{ dirtyCount }} 处修订</p>
-          <button type="button" class="danger-action" :disabled="!dirtyCount" @click="clearAllRevisions">清除所有修订</button>
-        </div>
-
-        <div class="patched-flow">
-          <article v-for="item in revisedItems" :key="`patched-${item.block_id}`" class="patched-card">
-            <div class="card-title">
+          <template v-else>
+            <div class="patched-list">
+              <article v-for="item in filteredPatchedItems" :key="item.block_id" class="patched-item">
+                <div class="patched-item__meta">{{ item.block_id }}</div>
+                <p class="patched-item__source">{{ item.source_text || "-" }}</p>
+                <p class="patched-item__translation">{{ item.mergedTranslation || "-" }}</p>
+                <button type="button" class="ghost-action" @click="jumpToBlock(item.block_id)">定位到正文</button>
+              </article>
+              <el-empty v-if="!filteredPatchedItems.length" description="当前还没有本地修改" />
             </div>
-            <div class="translation-pair">
-              <section class="pair-pane pair-pane--source">
-                <header class="pair-label">原文</header>
-                <p class="card-source">{{ item.source_text || "-" }}</p>
-              </section>
-              <section class="pair-pane pair-pane--translation">
-                <header class="pair-label">译文</header>
-                <div class="patched-translation">{{ item.mergedTranslation || "-" }}</div>
-              </section>
-            </div>
-          </article>
-
-          <el-empty v-if="!revisedItems.length" description="当前还没有本地修订" />
+          </template>
         </div>
-      </template>
 
-    </div>
-
-    <div class="workspace-footer">
-      <button type="button" class="submit-action" :disabled="!dirtyCount || !isEditable" @click="submitReview">
-        {{ submitting ? "重新生成中..." : "重新生成译文" }}
-      </button>
+        <aside class="review-rail" :class="{ 'is-active': activeTab === 'translations' }" aria-hidden="true">
+          <div v-if="activeTab === 'translations'" ref="masterScrollbarRef" class="review-master-scroll" @scroll="handleMasterScrollbarScroll">
+            <div ref="masterScrollbarSpacerRef" class="review-master-scroll__spacer" />
+          </div>
+        </aside>
+      </div>
     </div>
   </div>
 </template>
 
 <style scoped>
 .review-workspace {
-  --review-font-scale: 1;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr);
   height: 100%;
   min-height: 100%;
   background: #ffffff;
@@ -509,6 +909,33 @@ onBeforeUnmount(() => {
   gap: 16px;
 }
 
+.topbar-notice {
+  min-height: 40px;
+  padding: 0 14px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 14px;
+  flex: 0 1 auto;
+  max-width: min(560px, 100%);
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.topbar-notice.is-warning {
+  color: #d58a1e;
+  background: rgba(255, 248, 238, 0.96);
+  border-color: rgba(239, 182, 89, 0.35);
+}
+
+.topbar-notice.is-success {
+  color: #2f8f57;
+  background: rgba(239, 250, 244, 0.96);
+  border-color: rgba(93, 181, 124, 0.32);
+}
+
 .workspace-tabs {
   display: flex;
   align-items: center;
@@ -519,13 +946,8 @@ onBeforeUnmount(() => {
 
 .workspace-tab,
 .panel-close,
-.meta-button,
 .ghost-action,
-.icon-action,
-.primary-action,
-.danger-action,
-.card-translation,
-.submit-action {
+.primary-action {
   border: 0;
   background: transparent;
   cursor: pointer;
@@ -560,31 +982,17 @@ onBeforeUnmount(() => {
   font-size: 12px;
 }
 
-.panel-close {
-  width: 32px;
-  height: 32px;
-  border-radius: 999px;
-  color: var(--text-700);
-}
-
-.panel-close:hover {
-  background: rgba(103, 80, 164, 0.08);
-}
-
-.workspace-body {
-  min-height: 0;
-  padding: 12px 20px 12px;
-  display: grid;
-  grid-auto-rows: min-content;
+.topbar-actions {
+  display: flex;
+  align-items: center;
   gap: 12px;
-  overflow-y: auto;
-  overflow-x: hidden;
+  min-width: 0;
 }
 
 .search-shell {
   flex: 1 1 320px;
   min-width: 260px;
-  max-width: 100%;
+  max-width: 420px;
   height: 40px;
   padding: 0 12px;
   display: flex;
@@ -604,287 +1012,283 @@ onBeforeUnmount(() => {
   font-size: 14px;
 }
 
-.translation-flow,
-.patched-flow,
-.notes-list {
-  min-height: 0;
-  overflow: visible;
-  padding-right: 6px;
-  display: grid;
-  gap: 10px;
-  align-content: start;
-}
-
-.translation-card,
-.patched-card,
-.summary-card,
-.note-card {
-  display: grid;
-  gap: 8px;
-  font-size: calc(15px * var(--review-font-scale));
-}
-
-.card-title {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 12px;
-  font-weight: 500;
-  color: #34303f;
-}
-
-.card-badges {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-}
-
-.badge {
+.status-chip {
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  min-height: 24px;
-  padding: 0 10px;
-  border-radius: 999px;
-  font-size: 12px;
-}
-
-.badge-warning {
-  background: #fff5e0;
-  color: #c78000;
-}
-
-.badge-applied {
-  background: #eef2ff;
-  color: #4a63c7;
-}
-
-.badge-dirty {
-  background: #e8f7eb;
-  color: #2f8f47;
-}
-
-.card-source {
-  margin: 0;
-  color: #6e6a78;
-  white-space: pre-wrap;
-  line-height: 1.7;
-}
-
-.translation-pair {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 12px;
-  align-items: start;
-}
-
-.pair-pane {
-  min-height: 54px;
-  display: grid;
-  grid-template-rows: auto minmax(84px, auto);
-  gap: 6px;
-}
-
-.pair-label {
+  background: #eef3ff;
+  color: #5070d7;
   font-size: 12px;
   font-weight: 600;
-  color: #7a7588;
-  letter-spacing: 0.02em;
 }
 
-.card-translation-shell,
-.card-editor {
-  min-height: 56px;
+.panel-close {
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  color: var(--text-700);
 }
 
-.card-translation,
-.patched-translation {
-  width: 100%;
-  padding: 10px 12px;
-  border-radius: 6px;
-  background: #f6f7fb;
-  color: #38334a;
-  text-align: left;
-  white-space: pre-wrap;
-  line-height: 1.75;
+.panel-close:hover {
+  background: rgba(103, 80, 164, 0.08);
 }
 
-.card-translation.is-highlighted,
-.patched-translation {
-  background: #eaf8ea;
-  color: #2f3a33;
-}
-
-.card-translation:disabled {
-  cursor: not-allowed;
-  opacity: 0.78;
-}
-
-.translation-card.is-editing .card-translation-shell {
-  display: none;
-}
-
-.card-editor {
+.workspace-body {
+  min-height: 0;
+  padding: 14px 20px 18px;
   display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 12px;
+  overflow: hidden;
+}
+
+.review-main {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 14px;
+  gap: 12px;
+  overflow: hidden;
+}
+
+.review-main__content {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 12px;
 }
 
-.card-editor textarea {
-  width: 100%;
-  min-height: 112px;
-  border-radius: 6px;
-  border: 1px solid #7856ff;
-  outline: none;
-  resize: vertical;
-  padding: 14px;
-  font: inherit;
-  color: var(--text-900);
-}
-
-.editor-hint {
-  margin: 0;
-  color: #7a7588;
+.status-banner {
+  padding: 10px 14px;
+  border-radius: 14px;
+  background: rgba(255, 244, 228, 0.9);
+  color: #9d6a14;
   font-size: 13px;
 }
 
-.editor-actions-right--compact {
-  margin-left: auto;
+.status-banner.is-soft {
+  background: rgba(236, 241, 255, 0.9);
+  color: #4b5f9f;
 }
 
-.editor-actions,
-.patched-head,
-.workspace-footer {
+.review-headline {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 14px;
+  gap: 12px;
 }
 
-.editor-actions-left,
-.editor-actions-right,
-.footer-actions {
+.headline-left,
+.headline-right {
   display: flex;
   align-items: center;
+  gap: 12px;
   flex-wrap: wrap;
-  gap: 10px;
+}
+
+.headline-subtitle {
+  font-size: 12px;
+  color: #727083;
+}
+
+.pane-grid {
+  min-height: 0;
+  height: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+  align-items: stretch;
+}
+
+.doc-card {
+  min-height: 0;
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  border: 1px solid rgba(103, 80, 164, 0.1);
+  border-radius: 20px;
+  overflow: hidden;
+  background: #ffffff;
+}
+
+.doc-card__header {
+  padding: 14px 18px;
+  border-bottom: 1px solid rgba(103, 80, 164, 0.08);
+  font-size: 13px;
+  font-weight: 700;
+  color: #6f6881;
+}
+
+.doc-card__viewport {
+  min-height: 0;
+  height: 100%;
+  overflow: auto;
+  background: linear-gradient(180deg, #fff 0%, #fcfcff 100%);
+}
+
+.review-html-shell {
+  position: relative;
+  min-height: 100%;
+}
+
+.review-html-host {
+  min-height: 100%;
+  padding: 18px 22px 28px;
+  box-sizing: border-box;
+}
+
+.review-html-host :deep([data-block-id]) {
+  border-radius: 8px;
+  transition: background 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
+}
+
+.review-html-host--editable :deep([data-block-id]) {
+  cursor: text;
+}
+
+.review-html-host :deep(.is-review-active) {
+  background: rgba(92, 124, 255, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(92, 124, 255, 0.16);
+}
+
+.review-html-host :deep(.is-review-dirty) {
+  background: rgba(91, 178, 112, 0.14);
+  box-shadow: inset 0 0 0 1px rgba(91, 178, 112, 0.18);
+}
+
+.floating-editor {
+  position: absolute;
+  z-index: 4;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.98);
+  border: 1px solid rgba(103, 80, 164, 0.22);
+  box-shadow: 0 14px 32px rgba(53, 43, 86, 0.18);
+  overflow: hidden;
+}
+
+.floating-editor__textarea {
+  width: 100%;
+  min-height: inherit;
+  border: 0;
+  outline: none;
+  resize: vertical;
+  padding: 10px 12px;
+  font: inherit;
+  color: #2f2c3a;
+  line-height: 1.75;
+  background: transparent;
+}
+
+.patched-list {
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  gap: 12px;
+  align-content: start;
+  padding-right: 6px;
+}
+
+.patched-item {
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(63, 161, 95, 0.14);
+  background: rgba(63, 161, 95, 0.04);
+}
+
+.patched-item__meta {
+  margin-bottom: 8px;
+  font-size: 11px;
+  color: #8c8798;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.patched-item__source,
+.patched-item__translation {
+  margin: 0 0 8px;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  color: #2f2c3a;
 }
 
 .ghost-action,
-.primary-action,
-.danger-action,
-.submit-action,
-.icon-action {
+.primary-action {
   min-height: 40px;
-  padding: 0 14px;
-  border-radius: 6px;
+  padding: 0 16px;
+  border-radius: 999px;
   font-size: 14px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
 }
 
-.ghost-action,
-.icon-action {
-  background: #f1f1f1;
-  color: #625c6d;
-}
-
-.icon-action {
-  width: 40px;
-  padding: 0;
+.ghost-action {
+  background: rgba(103, 80, 164, 0.08);
+  color: #5c566c;
 }
 
 .primary-action {
-  background: #edf9ed;
-  color: #70a96d;
+  background: linear-gradient(135deg, #6e56cf 0%, #5c7cff 100%);
+  color: #ffffff;
+  box-shadow: 0 10px 18px rgba(92, 124, 255, 0.2);
 }
 
-.danger-action {
-  background: transparent;
-  color: #ff6f52;
-  border: 1px solid rgba(255, 111, 82, 0.55);
-}
-
-.notes-grid {
+.review-rail {
   min-height: 0;
-  display: grid;
-  grid-template-columns: 320px minmax(0, 1fr);
-  gap: 16px;
-}
-
-.summary-card,
-.note-card {
-  border: 1px solid rgba(103, 80, 164, 0.1);
-  border-radius: 16px;
-  padding: 9px;
-  background: #fff;
-}
-
-.summary-card h3 {
-  margin: 0 0 10px;
-}
-
-.summary-card p,
-.note-card p {
-  margin: 0;
-  color: var(--text-700);
-  line-height: 1.6;
-}
-
-.patched-head p {
-  margin: 0;
-  color: #686270;
-}
-
-.workspace-footer {
-  flex-shrink: 0;
-  padding: 10px 20px 12px;
-  border-top: 1px solid rgba(103, 80, 164, 0.12);
-  background: #ffffff;
+  border-left: 1px solid rgba(103, 80, 164, 0.08);
   display: flex;
-  justify-content: flex-end;
+  justify-content: center;
 }
 
-.submit-action {
-  min-width: 140px;
-  background: rgba(110, 86, 207, 0.12);
-  color: var(--brand-500);
+.review-rail.is-active {
+  background: linear-gradient(180deg, rgba(248, 249, 255, 0.95) 0%, rgba(243, 246, 255, 0.98) 100%);
 }
 
-.submit-action:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
+.review-master-scroll {
+  width: 100%;
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(92, 124, 255, 0.75) transparent;
 }
 
-.hidden-input {
-  display: none;
+.review-master-scroll::-webkit-scrollbar {
+  width: 8px;
 }
 
-@media (max-width: 1100px) {
-  .workspace-body,
-  .workspace-footer {
-    padding-left: 18px;
-    padding-right: 18px;
-  }
+.review-master-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
 
+.review-master-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(92, 124, 255, 0.68);
+}
+
+.review-master-scroll__spacer {
+  width: 1px;
+}
+
+@media (max-width: 720px) {
   .topbar-main,
-  .workspace-footer,
-  .editor-actions {
+  .review-headline {
     flex-direction: column;
     align-items: stretch;
   }
 
-  .translation-pair {
-    grid-template-columns: 1fr;
-    gap: 10px;
+  .topbar-notice {
+    white-space: normal;
   }
 
-  .pair-pane {
-    min-height: 0;
-    grid-template-rows: auto auto;
+  .pane-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .review-main {
+    grid-template-columns: 1fr;
+  }
+
+  .review-rail {
+    display: none;
   }
 }
 </style>
