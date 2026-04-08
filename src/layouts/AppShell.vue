@@ -5,37 +5,43 @@ import {
   CollectionTag,
   Files,
   FolderOpened,
-  Grid,
-  Operation,
   SwitchButton,
-  Tools,
   User,
 } from "@element-plus/icons-vue";
 
 import { useAuthStore } from "../stores/auth";
+import brandLogo from "../../logo.png";
 
 const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
 
-const productNavItems = [
-  { path: "/doc-translate/translate", label: "翻译", icon: Files },
-  { path: "/doc-translate/history", label: "历史", icon: FolderOpened },
-  { path: "/doc-translate/glossary", label: "术语", icon: CollectionTag },
-  { path: "/doc-translate/memory", label: "记忆", icon: Operation },
-  { path: "/doc-translate/tools", label: "工具", icon: Tools },
-];
+const canUseGlossary = computed(() => {
+  const roleSet = new Set(authStore.user?.roles || []);
+  return roleSet.has("admin") || roleSet.has("super_admin");
+});
+
+const productNavItems = computed(() => [
+  { path: "/doc-translate/translate", label: "翻译", icon: Files, disabled: false },
+  { path: "/doc-translate/history", label: "历史", icon: FolderOpened, disabled: false },
+  { path: "/doc-translate/glossary", label: "词库", icon: CollectionTag, disabled: !canUseGlossary.value },
+]);
 
 const activePath = computed(() => {
   if (route.path.startsWith("/doc-translate/task/")) {
     return "/doc-translate/translate";
   }
-  const found = productNavItems.find((item) => route.path.startsWith(item.path));
+  const found = productNavItems.value.find((item) => route.path.startsWith(item.path));
   return found?.path || "/doc-translate/translate";
 });
 
 const displayName = computed(() => authStore.user?.displayName || "未登录用户");
 const canManageIam = computed(() => {
+  const roleSet = new Set(authStore.user?.roles || []);
+  return roleSet.has("admin") || roleSet.has("super_admin");
+});
+
+const canManageContractTasks = computed(() => {
   const roleSet = new Set(authStore.user?.roles || []);
   return roleSet.has("admin") || roleSet.has("super_admin");
 });
@@ -50,26 +56,15 @@ function handleLogout() {
   authStore.logout();
   router.replace("/login");
 }
-
-
-const isTranslatePage = computed(() => route.path.startsWith('/doc-translate/translate'));
-
-function goToTranslate() {
-  router.push('/doc-translate/translate');
-}
 </script>
 
 <template>
   <div class="translate-shell">
     <aside class="shell-aside">
       <div class="brand-block" @click="navigate('/doc-translate/translate')">
-        <div class="brand-mark">
-          <span></span>
-          <span></span>
-        </div>
+        <img class="brand-logo" :src="brandLogo" alt="项目 Logo" />
         <div class="brand-copy">
           <strong>文档翻译</strong>
-          <span>Translate Workspace</span>
         </div>
       </div>
 
@@ -77,9 +72,10 @@ function goToTranslate() {
         <button
           v-for="item in productNavItems"
           :key="item.path"
-          :class="['nav-item', { 'is-active': activePath === item.path }]"
+          :class="['nav-item', { 'is-active': activePath === item.path, 'is-disabled': item.disabled }]"
           type="button"
-          @click="navigate(item.path)"
+          :disabled="item.disabled"
+          @click="!item.disabled && navigate(item.path)"
         >
           <el-icon class="nav-icon">
             <component :is="item.icon" />
@@ -89,11 +85,6 @@ function goToTranslate() {
       </nav>
 
       <div class="nav-footer">
-        <button class="logout-button" type="button" @click="handleLogout">
-          <el-icon><SwitchButton /></el-icon>
-          <span>退出登录</span>
-        </button>
-
         <el-dropdown class="profile-dropdown" trigger="click" placement="top-start">
           <button class="profile-entry" type="button">
             <el-icon><User /></el-icon>
@@ -101,7 +92,10 @@ function goToTranslate() {
           </button>
           <template #dropdown>
             <el-dropdown-menu>
-              <el-dropdown-item @click="navigate('/system/profile')">个人信息设置</el-dropdown-item>
+              <el-dropdown-item v-if="canManageIam" @click="navigate('/system/profile')">个人信息设置</el-dropdown-item>
+              <el-dropdown-item v-if="canManageContractTasks" @click="navigate('/system/contract-workflows')">
+                任务管理
+              </el-dropdown-item>
               <el-dropdown-item v-if="canManageIam" @click="navigate('/system/users')">用户管理</el-dropdown-item>
               <el-dropdown-item v-if="canManageIam" @click="navigate('/system/roles')">角色与权限</el-dropdown-item>
               <el-dropdown-item divided @click="handleLogout">
@@ -116,16 +110,11 @@ function goToTranslate() {
 
     <section class="shell-content">
       <header class="shell-header">
-        <div>
-          <p class="eyebrow">Simplify Style Workspace</p>
-          <h1>{{ route.meta.title || "翻译" }}</h1>
-        </div>
-
         <div class="header-actions">
-          <button v-if="!isTranslatePage" class="ghost-action" type="button" @click="goToTranslate">
-            <el-icon><Grid /></el-icon>
-            <span>返回翻译台</span>
-          </button>
+<!--          <button class="ghost-action" type="button" @click="navigate('/doc-translate/translate')">-->
+<!--            <el-icon><Grid /></el-icon>-->
+<!--            <span>返回翻译台</span>-->
+<!--          </button>-->
         </div>
       </header>
 
@@ -166,37 +155,24 @@ function goToTranslate() {
   cursor: pointer;
 }
 
-.brand-mark {
-  width: 28px;
-  height: 18px;
-  position: relative;
-}
-
-.brand-mark span {
-  position: absolute;
-  inset: 0;
-  border: 4px solid #6e56cf;
-  border-radius: 999px;
-}
-
-.brand-mark span:last-child {
-  transform: translateX(10px);
+.brand-logo {
+  width: 34px;
+  height: 34px;
+  object-fit: contain;
+  flex-shrink: 0;
 }
 
 .brand-copy {
-  display: grid;
-  gap: 2px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
 }
 
 .brand-copy strong {
   font-size: 14px;
   font-weight: 700;
   color: #2f244f;
-}
-
-.brand-copy span {
-  font-size: 11px;
-  color: #9b93b5;
+  line-height: 1.2;
 }
 
 .product-nav {
@@ -229,6 +205,16 @@ function goToTranslate() {
   background: #efebff;
   color: #5f45c6;
   font-weight: 600;
+}
+
+.nav-item.is-disabled {
+  color: #b5b0c3;
+  cursor: not-allowed;
+  opacity: 0.9;
+}
+
+.nav-item.is-disabled:hover {
+  background: transparent;
 }
 
 .nav-icon {
@@ -324,25 +310,11 @@ function goToTranslate() {
 }
 
 .shell-header {
-  height: 84px;
-  padding: 18px 28px 12px;
+  height: 40px;
+  padding: 4px 16px 2px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-}
-
-.eyebrow {
-  margin: 0 0 4px;
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: #988eb8;
-}
-
-.shell-header h1 {
-  margin: 0;
-  font-size: 28px;
-  color: #2f244f;
+  justify-content: flex-end;
 }
 
 .header-actions {
@@ -355,20 +327,21 @@ function goToTranslate() {
   border: 1px solid rgba(103, 80, 164, 0.14);
   background: rgba(255, 255, 255, 0.9);
   border-radius: 999px;
-  height: 42px;
-  padding: 0 16px;
+  height: 34px;
+  padding: 0 12px;
   display: inline-flex;
   align-items: center;
   gap: 8px;
   color: #5a4a8b;
   cursor: pointer;
+  font-size: 12px;
 }
 
 .shell-main {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 0 28px 28px;
+  padding: 0 16px 8px;
 }
 
 @media (max-width: 960px) {
@@ -400,11 +373,12 @@ function goToTranslate() {
   }
 
   .shell-header {
-    padding: 18px 18px 12px;
+    height: 36px;
+    padding: 4px 10px 2px;
   }
 
   .shell-main {
-    padding: 0 18px 18px;
+    padding: 0 10px 6px;
   }
 }
 </style>

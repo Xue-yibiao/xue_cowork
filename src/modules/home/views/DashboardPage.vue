@@ -2,6 +2,16 @@
 import { useAuthStore } from "../../../stores/auth";
 
 const authStore = useAuthStore();
+
+function formatLoginType(type?: string) {
+  if (type === "wecom") {
+    return "企业微信";
+  }
+  if (type === "phone") {
+    return "手机验证码";
+  }
+  return "账号密码";
+}
 </script>
 
 <template>
@@ -18,7 +28,7 @@ const authStore = useAuthStore();
       <template #header>平台状态</template>
       <el-descriptions :column="1" border>
         <el-descriptions-item label="登录方式">
-          {{ authStore.user?.loginType === "wecom" ? "企业微信" : "账号密码" }}
+          {{ formatLoginType(authStore.user?.loginType) }}
         </el-descriptions-item>
         <el-descriptions-item label="角色数">
           {{ authStore.user?.roles.length || 0 }}

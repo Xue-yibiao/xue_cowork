@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+    />
+    <title>进入文档翻译</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #eef4fb;
+        --card: rgba(255, 255, 255, 0.92);
+        --text: #17324f;
+        --muted: #657991;
+        --line: rgba(94, 126, 164, 0.18);
+        --primary: #2377e7;
+        --primary-strong: #155fcc;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif;
+        color: var(--text);
+        background:
+          radial-gradient(circle at top left, rgba(199, 224, 255, 0.88), transparent 42%),
+          linear-gradient(180deg, #f4f8fc 0%, var(--bg) 100%);
+        display: grid;
+        place-items: center;
+        padding: 24px;
+      }
+
+      .panel {
+        width: min(420px, 100%);
+        border-radius: 24px;
+        background: var(--card);
+        border: 1px solid var(--line);
+        box-shadow: 0 18px 60px rgba(27, 60, 102, 0.12);
+        padding: 28px 24px 24px;
+      }
+
+      .tag {
+        display: inline-flex;
+        align-items: center;
+        min-height: 28px;
+        padding: 0 12px;
+        border-radius: 999px;
+        background: rgba(35, 119, 231, 0.12);
+        color: var(--primary-strong);
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+      }
+
+      h1 {
+        margin: 18px 0 12px;
+        font-size: 28px;
+        line-height: 1.2;
+      }
+
+      p {
+        margin: 0 0 10px;
+        line-height: 1.8;
+        color: var(--muted);
+      }
+
+      .status {
+        margin-top: 18px;
+        padding: 14px 16px;
+        border-radius: 16px;
+        background: rgba(35, 119, 231, 0.06);
+        color: var(--text);
+        font-size: 14px;
+      }
+
+      .actions {
+        display: grid;
+        gap: 12px;
+        margin-top: 22px;
+      }
+
+      .button {
+        appearance: none;
+        border: 0;
+        border-radius: 14px;
+        min-height: 48px;
+        padding: 0 16px;
+        background: var(--primary);
+        color: #fff;
+        font-size: 16px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      .button:hover {
+        background: var(--primary-strong);
+      }
+
+      .secondary {
+        background: rgba(35, 119, 231, 0.1);
+        color: var(--primary-strong);
+      }
+
+      .secondary:hover {
+        background: rgba(35, 119, 231, 0.16);
+      }
+    </style>
+  </head>
+  <body>
+    <main class="panel">
+      <span class="tag">企业微信小程序入口</span>
+      <h1>正在进入文档翻译</h1>
+      <p>页面会自动跳转到企业微信统一认证入口，完成登录后进入系统。</p>
+      <p>如果未自动跳转，请点击下方按钮继续。</p>
+
+      <div class="status" id="status">正在准备跳转...</div>
+
+      <div class="actions">
+        <button class="button" id="goButton" type="button">继续进入</button>
+        <button class="button secondary" id="retryButton" type="button">重新生成跳转链接</button>
+      </div>
+    </main>
+
+    <script>
+      (function () {
+        const statusNode = document.getElementById("status");
+        const goButton = document.getElementById("goButton");
+        const retryButton = document.getElementById("retryButton");
+        const params = new URLSearchParams(window.location.search);
+
+        function normalizeRedirect(raw) {
+          const value = String(raw || "").trim();
+          if (!value.startsWith("/") || value.startsWith("//")) {
+            return "/doc-translate/translate";
+          }
+          return value;
+        }
+
+        function buildTarget() {
+          const redirect = normalizeRedirect(params.get("redirect"));
+          return (
+            window.location.origin +
+            "/auth/wecom/client/entry?redirect=" +
+            encodeURIComponent(redirect)
+          );
+        }
+
+        function navigate() {
+          const target = buildTarget();
+          statusNode.textContent = "正在跳转到统一认证入口...";
+          window.location.replace(target);
+        }
+
+        goButton.addEventListener("click", navigate);
+        retryButton.addEventListener("click", function () {
+          statusNode.textContent = "已重新生成链接，正在再次跳转...";
+          navigate();
+        });
+
+        window.setTimeout(navigate, 600);
+      })();
+    </script>
+  </body>
+</html>

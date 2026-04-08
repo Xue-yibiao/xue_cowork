@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
-import { RefreshRight, Search } from "@element-plus/icons-vue";
+import { Search } from "@element-plus/icons-vue";
 
 import { useAuthStore } from "../../../stores/auth";
 import {
@@ -10,14 +10,15 @@ import {
   type WorkflowQueryItem,
 } from "../api";
 
+type LangPairFilterValue = "" | "en_zh" | "zh_en" | "es_zh" | "zh_es" | "it_zh" | "zh_it";
+
 const router = useRouter();
 const authStore = useAuthStore();
 const accessToken = computed(() => authStore.accessToken || "");
 
 const keyword = ref("");
 const status = ref("");
-const srcLang = ref("");
-const tgtLang = ref("");
+const langPair = ref<LangPairFilterValue>("en_zh");
 const dateRange = ref<[Date, Date] | null>(null);
 const currentPage = ref(1);
 const pageSize = ref(10);
@@ -25,11 +26,54 @@ const total = ref(0);
 const loading = ref(false);
 const items = ref<WorkflowQueryItem[]>([]);
 
-const langOptions = [
-  { label: "全部语言", value: "" },
-  { label: "英文", value: "en" },
-  { label: "简体中文", value: "zh" },
+const langPairOptions: Array<{ label: string; value: LangPairFilterValue; src_lang?: string; tgt_lang?: string }> = [
+  { label: "全部方向", value: "" },
+  { label: "英文 -> 简体中文", value: "en_zh", src_lang: "en", tgt_lang: "zh" },
+  { label: "简体中文 -> 英文", value: "zh_en", src_lang: "zh", tgt_lang: "en" },
+  { label: "西班牙语 -> 简体中文", value: "es_zh", src_lang: "es", tgt_lang: "zh" },
+  { label: "简体中文 -> 西班牙语", value: "zh_es", src_lang: "zh", tgt_lang: "es" },
+  { label: "意大利语 -> 简体中文", value: "it_zh", src_lang: "it", tgt_lang: "zh" },
+  { label: "简体中文 -> 意大利语", value: "zh_it", src_lang: "zh", tgt_lang: "it" },
 ];
+
+const defaultLangPairFilterOption = langPairOptions[0]!;
+
+function normalizeWorkflowStatus(statusValue: unknown): string {
+  return String(statusValue || "").trim().toUpperCase();
+}
+
+function formatWorkflowStatusLabel(statusValue: unknown): string {
+  const normalized = normalizeWorkflowStatus(statusValue);
+  if (normalized === "WAIT_REVIEW") {
+    return "已完成";
+  }
+  return normalized || "-";
+}
+
+function getWorkflowStatusTagType(statusValue: unknown): "success" | "danger" | "info" {
+  const normalized = normalizeWorkflowStatus(statusValue);
+  if (normalized === "SUCCEEDED" || normalized === "WAIT_REVIEW") {
+    return "success";
+  }
+  if (normalized === "FAILED") {
+    return "danger";
+  }
+  return "info";
+}
+
+function getLangPairFilterConfig(value: LangPairFilterValue) {
+  return langPairOptions.find((item) => item.value === value) || defaultLangPairFilterOption;
+}
+
+function formatLangPairLabel(srcLang?: string | null, tgtLang?: string | null): string {
+  const pair = langPairOptions.find((item) => item.src_lang === srcLang && item.tgt_lang === tgtLang);
+  if (pair) {
+    return pair.label;
+  }
+  const src = srcLang || "-";
+  const tgt = tgtLang || "-";
+  return `${src} -> ${tgt}`;
+}
 
 function formatUnixTs(v: unknown): string {
   const n = Number(v || 0);
@@ -40,14 +84,15 @@ function formatUnixTs(v: unknown): string {
 }
 
 async function loadHistory() {
+  const langPairConfig = getLangPairFilterConfig(langPair.value);
   loading.value = true;
   try {
     const offset = (currentPage.value - 1) * pageSize.value;
     const resp = await queryContractWorkflows(accessToken.value, {
       q: keyword.value.trim() || undefined,
       status: status.value || undefined,
-      src_lang: srcLang.value || undefined,
-      tgt_lang: tgtLang.value || undefined,
+      src_lang: langPairConfig.src_lang,
+      tgt_lang: langPairConfig.tgt_lang,
       date_from: dateRange.value?.[0] ? dateRange.value[0].toISOString().slice(0, 10) : undefined,
       date_to: dateRange.value?.[1] ? dateRange.value[1].toISOString().slice(0, 10) : undefined,
       limit: pageSize.value,
@@ -85,7 +130,7 @@ onMounted(() => {
       </div>
 
       <div class="toolbar-filters">
-        <el-input v-model="keyword" placeholder="搜索 workflow_id / 文件名" clearable @keyup.enter="loadHistory">
+        <el-input v-model="keyword" placeholder="搜索文件名" clearable @keyup.enter="loadHistory">
           <template #prefix>
             <el-icon><Search /></el-icon>
           </template>
@@ -99,21 +144,18 @@ onMounted(() => {
           value-format=""
           unlink-panels
         />
-        <el-select v-model="srcLang">
-          <el-option v-for="item in langOptions" :key="`src-${item.value}`" :label="item.label" :value="item.value" />
+        <el-select v-model="langPair">
+          <el-option v-for="item in langPairOptions" :key="item.value" :label="item.label" :value="item.value" />
         </el-select>
-        <el-select v-model="tgtLang">
-          <el-option v-for="item in langOptions" :key="`tgt-${item.value}`" :label="item.label" :value="item.value" />
-        </el-select>
-        <el-select v-model="status">
-          <el-option label="全部状态" value="" />
-          <el-option label="RUNNING" value="RUNNING" />
-          <el-option label="WAIT_REVIEW" value="WAIT_REVIEW" />
-          <el-option label="FAILED" value="FAILED" />
-          <el-option label="SUCCEEDED" value="SUCCEEDED" />
-          <el-option label="CANCELLED" value="CANCELLED" />
-        </el-select>
-        <el-button :icon="RefreshRight" :loading="loading" @click="loadHistory">刷新</el-button>
+<!--        <el-select v-model="status">-->
+<!--          <el-option label="全部状态" value="" />-->
+<!--          <el-option label="RUNNING" value="RUNNING" />-->
+<!--          <el-option label="已完成" value="WAIT_REVIEW" />-->
+<!--          <el-option label="FAILED" value="FAILED" />-->
+<!--          <el-option label="SUCCEEDED" value="SUCCEEDED" />-->
+<!--          <el-option label="CANCELLED" value="CANCELLED" />-->
+<!--        </el-select>-->
+        <el-button :icon="Search" :loading="loading" @click="loadHistory">搜索</el-button>
       </div>
     </section>
 
@@ -128,27 +170,27 @@ onMounted(() => {
       </el-empty>
 
       <div v-else class="history-list" v-loading="loading">
-        <article v-for="row in items" :key="row.workflow_id" class="history-card">
+        <button
+          v-for="row in items"
+          :key="row.workflow_id"
+          class="history-card"
+          type="button"
+          @click="openWorkflow(row)"
+        >
           <div class="history-meta">
             <div>
               <p class="meta-file">{{ row.source_filename || row.workflow_id }}</p>
               <p class="meta-sub">
-                {{ row.src_lang || "-" }} -> {{ row.tgt_lang || "-" }}
+                {{ formatLangPairLabel(row.src_lang, row.tgt_lang) }}
                 <span class="dot">·</span>
                 {{ formatUnixTs(row.updated_at || row.created_at) }}
               </p>
             </div>
-            <el-tag :type="row.status === 'SUCCEEDED' ? 'success' : row.status === 'WAIT_REVIEW' ? 'warning' : row.status === 'FAILED' ? 'danger' : 'info'">
-              {{ row.status || "-" }}
+            <el-tag :type="getWorkflowStatusTagType(row.status)">
+              {{ formatWorkflowStatusLabel(row.status) }}
             </el-tag>
           </div>
-
-          <p class="workflow-line">Workflow: {{ row.workflow_id }}</p>
-
-          <div class="history-actions">
-            <el-button type="primary" plain @click="openWorkflow(row)">查看任务详情</el-button>
-          </div>
-        </article>
+        </button>
       </div>
     </section>
 
@@ -211,7 +253,7 @@ onMounted(() => {
 .toolbar-filters {
   margin-top: 18px;
   display: grid;
-  grid-template-columns: 1.3fr 1.2fr repeat(3, minmax(0, 0.7fr)) auto;
+  grid-template-columns: 1.3fr 1.2fr repeat(2, minmax(0, 0.8fr)) auto;
   gap: 12px;
 }
 
@@ -248,9 +290,26 @@ onMounted(() => {
 
 .history-card {
   border: 1px solid rgba(103, 80, 164, 0.12);
+  outline: none;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  border: 1px solid rgba(103, 80, 164, 0.12);
   border-radius: 18px;
   padding: 18px;
   background: linear-gradient(180deg, #fff 0%, #fcfbff 100%);
+  transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
+}
+
+.history-card:hover {
+  transform: translateY(-1px);
+  border-color: rgba(103, 80, 164, 0.22);
+  box-shadow: 0 12px 28px rgba(69, 52, 132, 0.08);
+}
+
+.history-card:focus-visible {
+  border-color: rgba(95, 69, 198, 0.45);
+  box-shadow: 0 0 0 3px rgba(95, 69, 198, 0.12);
 }
 
 .history-meta {
@@ -267,21 +326,13 @@ onMounted(() => {
   color: var(--text-900);
 }
 
-.meta-sub,
-.workflow-line {
+.meta-sub {
   margin: 8px 0 0;
   color: var(--text-500);
 }
 
 .dot {
   margin: 0 6px;
-}
-
-.history-actions {
-  margin-top: 16px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
 }
 
 .pager-row {
