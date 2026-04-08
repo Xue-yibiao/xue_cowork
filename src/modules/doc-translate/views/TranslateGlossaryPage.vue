@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { Download, Plus, Upload } from "@element-plus/icons-vue";
+import { Download, Plus, Edit, Upload } from "@element-plus/icons-vue";
 import type { UploadProps } from "element-plus";
 
 import { useAuthStore } from "../../../stores/auth";
@@ -20,9 +20,14 @@ import {
 } from "../api";
 
 type DialogMode = "create" | "edit";
-type TranslationPairValue = "en_zh" | "zh_en" | "es_zh" | "zh_es" | "it_zh" | "zh_it";
+type TranslationPairValue = "en_zh" | "zh_en" | "es_zh" | "zh_es" | "it_zh" | "zh_it" | "ru_zh" | "zh_ru";
 type CsvImportPairValue = "en_zh" | "zh_en";
-
+const downloadExcel = () => {
+  const link = document.createElement('a')
+  link.href = '/files/template.xlsx'
+  link.download = '数据模板.xlsx'
+  link.click()
+}
 const authStore = useAuthStore();
 const accessToken = computed(() => authStore.accessToken || "");
 const isTermbaseAdmin = computed(() => {
@@ -37,6 +42,8 @@ const translationPairOptions: Array<{ label: string; value: TranslationPairValue
   { label: "简体中文 -> 西班牙语", value: "zh_es", src_lang: "zh", tgt_lang: "es" },
   { label: "意大利语 -> 简体中文", value: "it_zh", src_lang: "it", tgt_lang: "zh" },
   { label: "简体中文 -> 意大利语", value: "zh_it", src_lang: "zh", tgt_lang: "it" },
+  { label: "俄文 -> 简体中文", value: "ru_zh", src_lang: "ru", tgt_lang: "zh" },
+  { label: "简体中文 -> 俄文", value: "zh_ru", src_lang: "zh", tgt_lang: "ru" },
 ];
 
 const csvImportPairOptions: Array<{ label: string; value: CsvImportPairValue; src_lang: "en" | "zh"; tgt_lang: "en" | "zh" }> = [
@@ -488,22 +495,20 @@ onMounted(async () => {
   <div class="glossary-page">
     <section class="glossary-toolbar">
       <div class="toolbar-left">
-        <el-select v-model="selectedSetId" class="set-selector" :loading="loadingSets" @change="() => { entryPage = 1; loadEntries(); }">
-          <el-option
-            v-for="item in setOptions"
-            :key="item.id"
-            :label="item.name"
-            :value="item.id"
-          />
+        <el-select v-model="selectedSetId" class="set-selector" :loading="loadingSets"
+          @change="() => { entryPage = 1; loadEntries(); }">
+          <el-option v-for="item in setOptions" :key="item.id" :label="item.name" :value="item.id" />
         </el-select>
-        <button class="action-link" type="button" @click="openCreateSetDialog">添加词库</button>
+        <!-- <button class="action-link" type="button" @click="openCreateSetDialog">新建词库</button> -->
+        <el-button :icon="Plus" @click="openCreateSetDialog">添加新词库</el-button>
+        <el-button :icon="Edit" @click="openEditSetDialog">重命名词库</el-button>
       </div>
 
-      <div class="toolbar-right">
-        <el-button :icon="Plus" @click="openEditSetDialog">编辑词库</el-button>
+      <!-- <div class="toolbar-right">
+        
         <el-button :icon="Upload" @click="openImportDialog">从表格导入</el-button>
         <el-button type="primary" :icon="Plus" @click="openCreateEntryDialog">添加术语</el-button>
-      </div>
+      </div> -->
     </section>
 
     <section class="glossary-body">
@@ -513,7 +518,7 @@ onMounted(async () => {
         </template>
         <p class="empty-tip">词库适合维护公司名、产品名、人名或专业词汇，翻译时会自动辅助一致性。</p>
         <div class="empty-actions">
-          <el-button type="primary" @click="openCreateSetDialog">添加词库</el-button>
+          <el-button type="primary" @click="openCreateSetDialog">新建词库</el-button>
           <el-button :icon="Upload" @click="openImportDialog">从表格导入</el-button>
         </div>
       </el-empty>
@@ -524,22 +529,26 @@ onMounted(async () => {
             <h2>{{ currentSet?.name }}</h2>
             <p>{{ currentSet?.description || "当前词库已接入文档翻译与文本翻译流程。" }}</p>
           </div>
-
           <div class="summary-tags">
             <el-tag>{{ formatTranslationPairLabel(currentSet?.src_lang, currentSet?.tgt_lang) }}</el-tag>
-            <el-tag :type="currentSet?.is_active === false ? 'info' : 'success'">{{ currentSet?.is_active === false ? "停用" : "活跃" }}</el-tag>
+            <el-tag :type="currentSet?.is_active === false ? 'info' : 'success'">{{ currentSet?.is_active === false ?
+              "停用" : "活跃" }}</el-tag>
           </div>
         </div>
 
         <div class="entry-filters">
-          <el-input v-model="entryKeyword" placeholder="搜索术语原文/译文" clearable @keyup.enter="() => { entryPage = 1; loadEntries(); }" />
+          <el-input v-model="entryKeyword" placeholder="搜索术语原文/译文" clearable
+            @keyup.enter="() => { entryPage = 1; loadEntries(); }" />
           <el-select v-model="entryActive" style="width: 160px">
             <el-option label="仅活跃" value="true" />
             <el-option label="仅停用" value="false" />
             <el-option label="全部" value="" />
           </el-select>
+
           <el-button @click="() => { entryPage = 1; loadEntries(); }">查询</el-button>
           <el-button @click="handleDeleteSet">停用词库</el-button>
+          <el-button :icon="Upload" @click="openImportDialog">从表格导入</el-button>
+          <el-button type="primary" :icon="Plus" @click="openCreateEntryDialog">添加术语</el-button>
         </div>
 
         <el-empty v-if="!entryLoading && entryItems.length === 0" description="当前词库还没有术语">
@@ -573,27 +582,22 @@ onMounted(async () => {
         </el-table>
 
         <div class="pager-row">
-          <el-pagination
-            v-model:current-page="entryPage"
-            v-model:page-size="entryPageSize"
-            layout="total, sizes, prev, pager, next"
-            :page-sizes="[10, 20, 50, 100]"
-            :total="entryTotal"
-            @current-change="loadEntries"
-            @size-change="() => { entryPage = 1; loadEntries(); }"
-          />
+          <el-pagination v-model:current-page="entryPage" v-model:page-size="entryPageSize"
+            layout="total, sizes, prev, pager, next" :page-sizes="[10, 20, 50, 100]" :total="entryTotal"
+            @current-change="loadEntries" @size-change="() => { entryPage = 1; loadEntries(); }" />
         </div>
       </template>
     </section>
 
-    <el-dialog v-model="setDialogVisible" :title="setDialogMode === 'create' ? '新建词库' : '编辑词库'" width="560px">
+    <el-dialog v-model="setDialogVisible" :title="setDialogMode === 'create' ? '添加新词库' : '重命名词库'" width="560px">
       <el-form label-width="92px">
         <el-form-item label="名称">
           <el-input v-model="setForm.set_name" maxlength="120" />
         </el-form-item>
         <el-form-item label="翻译方向">
           <el-select v-model="setForm.lang_pair">
-            <el-option v-for="item in translationPairOptions" :key="item.value" :label="item.label" :value="item.value" />
+            <el-option v-for="item in translationPairOptions" :key="item.value" :label="item.label"
+              :value="item.value" />
           </el-select>
         </el-form-item>
         <el-form-item label="说明">
@@ -614,7 +618,8 @@ onMounted(async () => {
         <div class="form-grid">
           <el-form-item label="翻译方向">
             <el-select v-model="entryForm.lang_pair">
-              <el-option v-for="item in translationPairOptions" :key="item.value" :label="item.label" :value="item.value" />
+              <el-option v-for="item in translationPairOptions" :key="item.value" :label="item.label"
+                :value="item.value" />
             </el-select>
           </el-form-item>
         </div>
@@ -658,18 +663,15 @@ onMounted(async () => {
 
     <el-dialog v-model="importDialogVisible" title="导入术语" width="860px">
       <div class="import-dialog">
-        <el-upload
-          drag
-          :auto-upload="false"
-          accept=".csv,text/csv"
-          :before-upload="beforeUploadCsv"
-          :on-remove="onCsvRemove"
-        >
-          <el-icon class="import-icon"><Upload /></el-icon>
+        <el-upload drag :auto-upload="false" accept=".csv,text/csv" :before-upload="beforeUploadCsv"
+          :on-remove="onCsvRemove">
+          <el-icon class="import-icon">
+            <Upload />
+          </el-icon>
           <div class="import-title">上传 `.csv` 术语文件</div>
-          <div class="import-note">当前合同翻译新接口使用 `import-csv`，前端入口与独立术语页工作流保持一致。</div>
+          <div class="import-note">上传格式为csv，模版从下方下载</div>
         </el-upload>
-
+        <el-button :icon="Download" @click="downloadExcel"  class="Download-btn">下载模板</el-button>
         <el-form label-width="92px">
           <el-form-item label="词库名称">
             <el-input v-model="importForm.set_name" />
@@ -677,12 +679,13 @@ onMounted(async () => {
           <div class="form-grid">
             <el-form-item label="翻译方向">
               <el-select v-model="importForm.lang_pair">
-                <el-option v-for="item in csvImportPairOptions" :key="item.value" :label="item.label" :value="item.value" />
+                <el-option v-for="item in csvImportPairOptions" :key="item.value" :label="item.label"
+                  :value="item.value" />
               </el-select>
             </el-form-item>
           </div>
           <el-form-item label="导入限制">
-            <div class="import-limit-note">CSV 导入当前仅支持中英双语列；西/意术语请先用手工创建方式维护。</div>
+            <div class="import-limit-note">CSV 导入当前仅支持中英双语列；其他语言术语请先用手工创建方式维护。</div>
           </el-form-item>
           <el-form-item label="说明">
             <el-input v-model="importForm.description" type="textarea" :rows="3" />
@@ -704,6 +707,7 @@ onMounted(async () => {
 .glossary-page {
   display: grid;
   gap: 18px;
+  max-width: 1600px;
 }
 
 .glossary-toolbar,
@@ -768,8 +772,10 @@ onMounted(async () => {
 .entry-filters {
   margin: 20px 0;
   display: grid;
-  grid-template-columns: 1fr 160px auto auto;
+  /* grid-template-columns: 1fr 160px auto auto auto auto; */
+  grid-template-columns: 1fr 160px auto auto auto auto;
   gap: 12px;
+
 }
 
 .pager-row {
@@ -833,6 +839,7 @@ onMounted(async () => {
 }
 
 @media (max-width: 1024px) {
+
   .glossary-toolbar,
   .toolbar-left,
   .toolbar-right {
@@ -846,6 +853,7 @@ onMounted(async () => {
 }
 
 @media (max-width: 768px) {
+
   .glossary-toolbar,
   .glossary-body {
     padding: 18px;
@@ -857,5 +865,10 @@ onMounted(async () => {
     grid-template-columns: 1fr;
     display: grid;
   }
+}
+.Download-btn {
+  width: 120px; 
+  color: #fff;
+  background-color: #1890ff;
 }
 </style>

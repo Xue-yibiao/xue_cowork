@@ -3,7 +3,7 @@ import axios from "axios";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
-import { ArrowUp,Delete } from "@element-plus/icons-vue";
+import { ArrowUp } from "@element-plus/icons-vue";
 import type { UploadInstance, UploadProps, UploadUserFile } from "element-plus";
 
 import { useAuthStore } from "../../../stores/auth";
@@ -12,14 +12,12 @@ import {
   queryContractWorkflows,
   submitContractDocx,
   translateContractTextInline,
-  hideContractWorkflow,
   type TermbaseSetItem,
   type WorkflowQueryItem,
-
 } from "../api";
 
 type WorkspaceMode = "upload" | "text";
-type LangPairValue = "en_zh" | "zh_en" | "es_zh" | "zh_es" | "it_zh" | "zh_it" | "ru_zh" | "zh_ru";
+type LangPairValue = "en_zh" | "zh_en" | "es_zh" | "zh_es" | "it_zh" | "zh_it"| "ru_zh" | "zh_ru";
 
 const authStore = useAuthStore();
 const router = useRouter();
@@ -368,38 +366,16 @@ onBeforeUnmount(() => {
     recentTaskTimer = null;
   }
 });
-
-const hidingWorkflowId = ref<string | null>(null); // 用于显示加载状态
-
-async function handleHideTask(row: WorkflowQueryItem) {
-  const workflowId = row.workflow_id;
-  if (!workflowId) return;
-
-  hidingWorkflowId.value = workflowId;
-  try {
-    await hideContractWorkflow(accessToken.value, workflowId);
-    // 从本地列表中移除该任务
-    recentItems.value = recentItems.value.filter(item => item.workflow_id !== workflowId);
-    ElMessage.success("任务已隐藏");
-  } catch (error) {
-    console.error(error);
-    ElMessage.error("隐藏失败，请稍后重试");
-  } finally {
-    hidingWorkflowId.value = null;
-  }
-}
 </script>
 
 <template>
   <div class="translate-page" :class="{ 'is-text-mode': workspaceMode === 'text' }">
     <section class="compose-panel">
       <div class="mode-switch">
-        <button :class="['mode-pill', { 'is-active': workspaceMode === 'upload' }]" type="button"
-          @click="workspaceMode = 'upload'">
+        <button :class="['mode-pill', { 'is-active': workspaceMode === 'upload' }]" type="button" @click="workspaceMode = 'upload'">
           上传文档
         </button>
-        <button :class="['mode-pill', { 'is-active': workspaceMode === 'text' }]" type="button"
-          @click="workspaceMode = 'text'">
+        <button :class="['mode-pill', { 'is-active': workspaceMode === 'text' }]" type="button" @click="workspaceMode = 'text'">
           文本翻译
         </button>
       </div>
@@ -416,8 +392,7 @@ async function handleHideTask(row: WorkflowQueryItem) {
             <div class="upload-zone">
               <div v-if="hasActiveWorkflow" class="upload-selected-card upload-selected-card--locked">
                 <div class="upload-selected-type">{{ formatWorkflowStatusLabel(activeWorkflow?.status) }}</div>
-                <div class="upload-selected-name">{{ activeWorkflow?.source_filename || activeWorkflow?.workflow_id }}
-                </div>
+                <div class="upload-selected-name">{{ activeWorkflow?.source_filename || activeWorkflow?.workflow_id }}</div>
                 <div class="upload-selected-meta">
                   <span>{{ formatUnixTs(activeWorkflow?.updated_at || activeWorkflow?.created_at) }}</span>
                   <span>{{ activeWorkflow?.workflow_id }}</span>
@@ -434,14 +409,22 @@ async function handleHideTask(row: WorkflowQueryItem) {
                 <div class="upload-selected-note">当前已锁定该文件。若要更换，请先移除后再重新选择。</div>
                 <el-button class="upload-selected-action" @click="clearSelectedUpload">移除文件</el-button>
               </div>
-              <el-upload v-else ref="uploadRef" v-model:file-list="uploadList" class="upload-dropzone" drag
-                :auto-upload="false" :show-file-list="false" :limit="1"
+              <el-upload
+                v-else
+                ref="uploadRef"
+                v-model:file-list="uploadList"
+                class="upload-dropzone"
+                drag
+                :auto-upload="false"
+                :show-file-list="false"
+                :limit="1"
                 accept=".docx,.pdf,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                :before-upload="beforeUploadDocx" :on-change="handleUploadChange" :on-remove="handleUploadRemove"
-                :on-exceed="handleUploadExceed">
-                <el-icon class="upload-icon">
-                  <ArrowUp />
-                </el-icon>
+                :before-upload="beforeUploadDocx"
+                :on-change="handleUploadChange"
+                :on-remove="handleUploadRemove"
+                :on-exceed="handleUploadExceed"
+              >
+                <el-icon class="upload-icon"><ArrowUp /></el-icon>
                 <div class="upload-title">点击选择或拖拽文件到这里</div>
                 <div class="upload-note">
                   仅支持word文档和pdf文件，处理时间较长时请耐心等待。
@@ -455,8 +438,13 @@ async function handleHideTask(row: WorkflowQueryItem) {
           </div>
 
           <div class="compose-actions">
-            <el-button type="primary" class="action-btn action-btn--primary" :loading="submittingDoc"
-              :disabled="!selectedDocx || hasActiveWorkflow" @click="handleSubmitDocx">
+            <el-button
+              type="primary"
+              class="action-btn action-btn--primary"
+              :loading="submittingDoc"
+              :disabled="!selectedDocx || hasActiveWorkflow"
+              @click="handleSubmitDocx"
+            >
               开始翻译
             </el-button>
           </div>
@@ -467,8 +455,15 @@ async function handleHideTask(row: WorkflowQueryItem) {
             <div class="text-compare-board">
               <section class="text-pane">
                 <header class="text-pane-head">{{ currentLangLabels[0] }}</header>
-                <el-input v-model="textInput" class="text-compare-input" type="textarea" resize="none"
-                  maxlength="120000" show-word-limit placeholder="输入需要翻译的内容（Shift+Enter 换行）" />
+                <el-input
+                  v-model="textInput"
+                  class="text-compare-input"
+                  type="textarea"
+                  resize="none"
+                  maxlength="120000"
+                  show-word-limit
+                  placeholder="输入需要翻译的内容（Shift+Enter 换行）"
+                />
               </section>
 
               <section class="text-pane is-output">
@@ -487,8 +482,7 @@ async function handleHideTask(row: WorkflowQueryItem) {
             <el-button class="action-btn action-btn--secondary" @click="resetTextPanels">重新输入</el-button>
             <div class="compose-actions-group">
               <el-button class="action-btn action-btn--secondary" @click="copyTextOutput">复制译文</el-button>
-              <el-button type="primary" class="action-btn action-btn--primary" :loading="submittingText"
-                @click="handleSubmitText">
+              <el-button type="primary" class="action-btn action-btn--primary" :loading="submittingText" @click="handleSubmitText">
                 开始翻译
               </el-button>
             </div>
@@ -500,10 +494,10 @@ async function handleHideTask(row: WorkflowQueryItem) {
     <aside v-if="workspaceMode === 'upload'" class="recent-panel">
       <div class="recent-header">
         <div>
-          <h3>最近上传的文档</h3>
+          <h3>您之前上传的文档</h3>
           <p>点击任务进入原文/译文预览与人工校验页面</p>
         </div>
-        <button class="more-link" type="button" @click="openHistory">历史详情</button>
+        <button class="more-link" type="button" @click="openHistory">查看更多</button>
       </div>
 
       <div v-if="visibleRecentItems.length === 0 && !recentLoading" class="recent-empty">
@@ -511,8 +505,13 @@ async function handleHideTask(row: WorkflowQueryItem) {
       </div>
 
       <div v-else class="recent-list" v-loading="recentLoading">
-        <button v-for="row in visibleRecentItems" :key="row.workflow_id" class="recent-item" type="button"
-          @click="openTask(row)">
+        <button
+          v-for="row in visibleRecentItems"
+          :key="row.workflow_id"
+          class="recent-item"
+          type="button"
+          @click="openTask(row)"
+        >
           <div class="recent-meta">
             <div class="file-dot">W</div>
             <div class="recent-copy">
@@ -520,13 +519,12 @@ async function handleHideTask(row: WorkflowQueryItem) {
               <p class="recent-sub">{{ formatUnixTs(row.updated_at || row.created_at) }}</p>
             </div>
           </div>
-          <div style="display: flex; align-items: center; gap: 8px;">
-            <el-tag size="small" :type="getWorkflowStatusTagType(row.status)">
-              {{ formatWorkflowStatusLabel(row.status) }}
-            </el-tag>
-            <el-button type="danger" size="small" :icon="Delete" :loading="hidingWorkflowId === row.workflow_id"
-              @click.stop="handleHideTask(row)" circle plain />
-          </div>
+          <el-tag
+            size="small"
+            :type="getWorkflowStatusTagType(row.status)"
+          >
+            {{ formatWorkflowStatusLabel(row.status) }}
+          </el-tag>
         </button>
       </div>
     </aside>
@@ -815,7 +813,7 @@ async function handleHideTask(row: WorkflowQueryItem) {
   grid-template-rows: 52px minmax(0, 1fr);
 }
 
-.text-pane+.text-pane {
+.text-pane + .text-pane {
   border-left: 1px solid rgba(103, 80, 164, 0.12);
 }
 
@@ -993,7 +991,6 @@ async function handleHideTask(row: WorkflowQueryItem) {
 }
 
 @media (max-width: 768px) {
-
   .compose-panel,
   .recent-panel {
     padding: 18px;
@@ -1027,7 +1024,7 @@ async function handleHideTask(row: WorkflowQueryItem) {
     grid-template-columns: 1fr;
   }
 
-  .text-pane+.text-pane {
+  .text-pane + .text-pane {
     border-left: 0;
     border-top: 1px solid rgba(103, 80, 164, 0.12);
   }
@@ -1043,22 +1040,6 @@ async function handleHideTask(row: WorkflowQueryItem) {
     width: 100%;
     flex-direction: column-reverse;
     align-items: stretch;
-  }
-}
-
-.hide-btn {
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  font-size: 18px;
-  opacity: 0.6;
-  transition: opacity 0.2s;
-  &:hover {
-    opacity: 1;
-  }
-  &:disabled {
-    cursor: not-allowed;
-    opacity: 0.3;
   }
 }
 </style>

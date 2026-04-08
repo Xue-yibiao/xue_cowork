@@ -10,7 +10,7 @@ import {
 } from "@element-plus/icons-vue";
 
 import { useAuthStore } from "../stores/auth";
-import brandLogo from "../../logo.png";
+const brandLogo = '/files/logos.png';
 
 const route = useRoute();
 const router = useRouter();
@@ -62,7 +62,7 @@ function handleLogout() {
   <div class="translate-shell">
     <aside class="shell-aside">
       <div class="brand-block" @click="navigate('/doc-translate/translate')">
-        <img class="brand-logo" :src="brandLogo" alt="项目 Logo" />
+        <img class="brand-logo" :src="brandLogo" alt="Logo" />
         <div class="brand-copy">
           <strong>文档翻译</strong>
         </div>

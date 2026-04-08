@@ -10,7 +10,7 @@ import {
   type WorkflowQueryItem,
 } from "../api";
 
-type LangPairFilterValue = "" | "en_zh" | "zh_en" | "es_zh" | "zh_es" | "it_zh" | "zh_it";
+type LangPairFilterValue = "" | "en_zh" | "zh_en" | "es_zh" | "zh_es" | "it_zh" | "zh_it"| "ru_zh" | "zh_ru";
 
 const router = useRouter();
 const authStore = useAuthStore();
@@ -34,6 +34,8 @@ const langPairOptions: Array<{ label: string; value: LangPairFilterValue; src_la
   { label: "简体中文 -> 西班牙语", value: "zh_es", src_lang: "zh", tgt_lang: "es" },
   { label: "意大利语 -> 简体中文", value: "it_zh", src_lang: "it", tgt_lang: "zh" },
   { label: "简体中文 -> 意大利语", value: "zh_it", src_lang: "zh", tgt_lang: "it" },
+  { label: "俄文 -> 简体中文", value: "ru_zh", src_lang: "ru", tgt_lang: "zh" },
+  { label: "简体中文 -> 俄文", value: "zh_ru", src_lang: "zh", tgt_lang: "ru" },
 ];
 
 const defaultLangPairFilterOption = langPairOptions[0]!;

@@ -140,6 +140,8 @@ interface WorkflowQueryItem {
   has_source_pdf?: boolean;
   has_translated_pdf?: boolean;
   has_translated_docx?: boolean;
+
+  is_hidden?: boolean;
 }
 
 interface WorkflowQueryResponse {
@@ -781,6 +783,18 @@ async function deleteContractAdminWorkflowsForOwner(
     skipped_invalid_state: Number(data.skipped_invalid_state || 0),
   };
 }
+// 隐藏（软删除）一个合同翻译任务
+async function hideContractWorkflow(
+  accessToken: string | null | undefined,
+  workflowId: string,
+): Promise<{ ok: boolean }> {
+  const { data } = await http.patch<{ ok: boolean }>(
+    `/api/contract-translate/workflows/${encodeURIComponent(workflowId)}/hide`,
+    { is_hidden: true },
+    { headers: authHeaders(accessToken) }
+  );
+  return data;
+}
 
 export type {
   AdminWorkflowDeleteBatchResponse,
@@ -838,4 +852,6 @@ export {
   translateNmtText,
   updateTermbaseEntry,
   updateTermbaseSet,
+
+  hideContractWorkflow,
 };
